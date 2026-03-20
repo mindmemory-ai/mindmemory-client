@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -199,7 +202,208 @@ def chat(
         one_turn(line)
 
 
-sync_app = typer.Typer(help="MindMemory 同步 API 调试")
+sync_app = typer.Typer(help="MindMemory 同步：API、记忆 AES-GCM、git 推送")
+
+
+@sync_app.command("encrypt-file")
+def sync_encrypt_file(
+    input_path: Path = typer.Argument(..., exists=True, readable=True),
+    output_path: Optional[Path] = typer.Option(None, "-o", "--output", help="默认 stdout"),
+    private_key: Path = typer.Option(
+        ...,
+        "--private-key",
+        envvar="MMEM_PRIVATE_KEY_PATH",
+        help="OpenSSH 私钥路径（与 gen_register_bundle 一致）",
+    ),
+) -> None:
+    """明文文件 → AES-256-GCM（K_seed）→ Base64 单行。"""
+    from mindmemory_client.keys import read_openssh_private_key_pem
+    from mindmemory_client.memory_crypto import encrypt_memory_base64
+    from mindmemory_client.register_crypto import k_seed_bytes_from_private_key_openssh
+
+    pem = read_openssh_private_key_pem(private_key)
+    key = k_seed_bytes_from_private_key_openssh(pem)
+    data = input_path.read_bytes()
+    b64 = encrypt_memory_base64(data, key)
+    if output_path:
+        output_path.write_text(b64 + "\n", encoding="utf-8")
+        typer.echo(f"已写入 {output_path}")
+    else:
+        typer.echo(b64)
+
+
+@sync_app.command("decrypt-file")
+def sync_decrypt_file(
+    input_path: Path = typer.Argument(..., exists=True, readable=True),
+    output_path: Optional[Path] = typer.Option(None, "-o", "--output", help="默认 stdout 二进制"),
+    private_key: Path = typer.Option(
+        ...,
+        "--private-key",
+        envvar="MMEM_PRIVATE_KEY_PATH",
+    ),
+) -> None:
+    """Base64 密文文件 → 明文（与 encrypt-file 配对）。"""
+    from mindmemory_client.keys import read_openssh_private_key_pem
+    from mindmemory_client.memory_crypto import decrypt_memory_base64
+    from mindmemory_client.register_crypto import k_seed_bytes_from_private_key_openssh
+
+    pem = read_openssh_private_key_pem(private_key)
+    key = k_seed_bytes_from_private_key_openssh(pem)
+    b64 = input_path.read_text(encoding="utf-8").strip()
+    plain = decrypt_memory_base64(b64, key)
+    if output_path:
+        output_path.write_bytes(plain)
+        typer.echo(f"已写入 {output_path}")
+    else:
+        sys.stdout.buffer.write(plain)
+
+
+@sync_app.command("push")
+def sync_push(
+    agent: str = typer.Option(..., "--agent", help="Agent 名称"),
+    schema: str = typer.Option(
+        "v1",
+        "--schema",
+        help="memory_schema_version，对应 git 推送分支名",
+    ),
+    git_dir: Optional[Path] = typer.Option(
+        None,
+        "--git-dir",
+        help="已 init 且配置 remote 的仓库；省略则只生成当前目录 mmem_payload.enc，不调用 MMEM sync API",
+    ),
+    base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
+) -> None:
+    """
+    有 --git-dir：begin-submit → 写入加密 bundle → git commit/push → mark-completed。
+    无 --git-dir：仅写入 ./mmem_payload.enc（本地准备，不占锁）。
+    完整推送需 MMEM_USER_UUID、MMEM_PRIVATE_KEY_PATH、MindMemory 可达。
+    """
+    from mindmemory_client.api import MmemApiClient
+    from mindmemory_client.keys import read_openssh_private_key_pem
+    from mindmemory_client.memory_crypto import encrypt_memory_base64
+    from mindmemory_client.register_crypto import k_seed_bytes_from_private_key_openssh
+
+    cfg = MindMemoryClientConfig()
+    if base_url:
+        cfg = cfg.model_copy(update={"base_url": base_url})
+    if not cfg.private_key_path:
+        typer.echo("需要 MMEM_PRIVATE_KEY_PATH", err=True)
+        raise typer.Exit(1)
+
+    pem = read_openssh_private_key_pem(Path(cfg.private_key_path))
+    key = k_seed_bytes_from_private_key_openssh(pem)
+    body = {
+        "mmem_client_bundle": 1,
+        "ts": int(time.time()),
+        "agent_name": agent,
+        "schema": schema,
+    }
+    b64 = encrypt_memory_base64(json.dumps(body, ensure_ascii=False).encode("utf-8"), key)
+
+    work = Path(git_dir) if git_dir else Path.cwd()
+    out_file = work / "mmem_payload.enc"
+
+    if not git_dir:
+        out_file.write_text(b64 + "\n", encoding="utf-8")
+        typer.echo(f"已写入 {out_file}")
+        typer.echo("未使用 --git-dir：未调用 begin-submit。将本文件复制到仓库后手动同步，或再次运行并加 --git-dir。")
+        return
+
+    if not cfg.user_uuid:
+        typer.echo("使用 --git-dir 同步需要 MMEM_USER_UUID", err=True)
+        raise typer.Exit(1)
+
+    lock_uuid = ""
+    try:
+        with MmemApiClient(cfg) as api:
+            begin = api.begin_submit(cfg.user_uuid, agent, holder_info="mmem-cli push")
+            lock_uuid = begin["lock_uuid"]
+            typer.echo(f"begin-submit: lock_uuid={lock_uuid}")
+
+        out_file.write_text(b64 + "\n", encoding="utf-8")
+        typer.echo(f"已写入 {out_file}")
+
+        meta = json.dumps(
+            {"memory_schema_version": schema, "client_version": "mindmemory-client"},
+            ensure_ascii=False,
+        )
+        subprocess.run(
+            ["git", "-C", str(git_dir), "add", "mmem_payload.enc"],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(git_dir),
+                "commit",
+                "-m",
+                "mmem cli bundle",
+                "-m",
+                f"MMEM_META: {meta}",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(git_dir),
+                "push",
+                "origin",
+                f"HEAD:refs/heads/{schema}",
+            ],
+            check=True,
+        )
+        commit_id = subprocess.check_output(
+            ["git", "-C", str(git_dir), "rev-parse", "HEAD"],
+            text=True,
+        ).strip()
+        with MmemApiClient(cfg) as api:
+            api.mark_completed(
+                cfg.user_uuid,
+                agent,
+                lock_uuid,
+                True,
+                [commit_id],
+                None,
+                commit_for_payload=commit_id,
+            )
+        typer.echo(f"mark-completed: ok, commit_id={commit_id}")
+    except subprocess.CalledProcessError as e:
+        typer.echo(f"git 失败: {e}", err=True)
+        if lock_uuid:
+            try:
+                with MmemApiClient(cfg) as api:
+                    api.mark_completed(
+                        cfg.user_uuid,
+                        agent,
+                        lock_uuid,
+                        False,
+                        None,
+                        str(e),
+                        commit_for_payload="",
+                    )
+            except Exception as e2:
+                typer.echo(f"mark-completed(fail) 也失败: {e2}", err=True)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.echo(f"失败: {e}", err=True)
+        if lock_uuid:
+            try:
+                with MmemApiClient(cfg) as api:
+                    api.mark_completed(
+                        cfg.user_uuid,
+                        agent,
+                        lock_uuid,
+                        False,
+                        None,
+                        str(e),
+                        commit_for_payload="",
+                    )
+            except Exception:
+                pass
+        raise typer.Exit(1)
 
 
 @sync_app.command("ping")
