@@ -23,9 +23,9 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 ### 加密与注册材料（见设计文档 §11、`mindmemory/tools/gen_register_bundle.py`）
 
 - [ ] `crypto` 或 `keys` 扩展：`key_fingerprint_from_public_key_ssh()` — 与 `_ssh_pubkey_blob_sha256_hex` 一致
-- [ ] `encrypted_password_from_private_key_openssh()` — `hex(SHA256(privkey_pem_utf8))`，与 `gen_register_bundle.py` 字节级一致（单元测试对照官方脚本输出）
-- [ ] `P_mem` 策略：CSPRNG 随机口令持久化本地 +（可选）用 `K_seed` 经 HKDF 包裹同步；或与脚本一致仅用 `K_seed` 派生 AES 密钥（需版本字段）
-- [ ] 记忆载荷：**AES-256-GCM**（12 字节 nonce，`nonce‖ciphertext‖tag` → Base64），与 `openclaw-mmem/docs/mmem记忆文件结构.md` 一致
+- [ ] `k_seed_bytes_from_private_key_openssh()` — `SHA256(privkey_pem_utf8)` 原始 32 字节；`encrypted_password_hex()` — 与 `gen_register_bundle.py` 字节级一致（单元测试对照官方脚本）
+- [ ] **AES-256-GCM 密钥 = `K_seed` 32 字节**（全用户各 Agent 统一，见 §11.1）
+- [ ] 记忆载荷格式：12 字节 nonce，`nonce‖ciphertext‖tag` → Base64，与 `openclaw-mmem/docs/mmem记忆文件结构.md` 一致
 
 ## CLI `mmem`
 
