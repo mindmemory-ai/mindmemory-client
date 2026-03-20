@@ -1,2 +1,0 @@
-[console_scripts]
-mmem = mmem_cli.main:main

@@ -1,2 +1,0 @@
-mindmemory_client
-mmem_cli
