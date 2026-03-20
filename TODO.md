@@ -20,12 +20,24 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 - [x] 单元测试：`tests/test_sync_payload.py`、`tests/test_llm_profiles.py`
 - [x] `llm_profiles` + `ollama_llm`：默认 Ollama；`~/.config/mmem/config.toml` 多 profile；环境变量覆盖
 
+### 加密与注册材料（见设计文档 §11、`mindmemory/tools/gen_register_bundle.py`）
+
+- [ ] `crypto` 或 `keys` 扩展：`key_fingerprint_from_public_key_ssh()` — 与 `_ssh_pubkey_blob_sha256_hex` 一致
+- [ ] `encrypted_password_from_private_key_openssh()` — `hex(SHA256(privkey_pem_utf8))`，与 `gen_register_bundle.py` 字节级一致（单元测试对照官方脚本输出）
+- [ ] `P_mem` 策略：CSPRNG 随机口令持久化本地 +（可选）用 `K_seed` 经 HKDF 包裹同步；或与脚本一致仅用 `K_seed` 派生 AES 密钥（需版本字段）
+- [ ] 记忆载荷：**AES-256-GCM**（12 字节 nonce，`nonce‖ciphertext‖tag` → Base64），与 `openclaw-mmem/docs/mmem记忆文件结构.md` 一致
+
 ## CLI `mmem`
 
 - [x] `mmem doctor` — 依赖、MindMemory、Ollama（`/api/tags`）
 - [x] `mmem chat` — 默认 `--llm ollama`；`--profile` / `-p`；`--ollama-url`、`--model`；`mock`/`echo`；`--no-remote`
 - [x] `mmem models` — 列出已加载 profile
-- [ ] `mmem sync push` — 加密 + git worktree（与 openclaw-mmem 对齐，后续）
+- [ ] **`mmem sync push`** — 完整闭环：  
+  - [ ] 从私钥重算 `encrypted_password` / `K_seed`（与 bundle 工具一致）  
+  - [ ] 序列化 PNMS（或约定切片）→ `P_mem` / HKDF → **AES-256-GCM** → 写入本地 git 工作树  
+  - [ ] `git commit` / `git push` 至远端分支（`memory_schema_version`）  
+  - [ ] `begin-submit` → push → `mark-completed`（`commit_ids`）  
+  - [ ] 与 `mindmemory/mmem.md` 3.3、`openclaw-mmem` 记忆文件结构对齐
 
 ## 联调
 

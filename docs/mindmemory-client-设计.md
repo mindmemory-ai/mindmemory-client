@@ -181,6 +181,7 @@
 - 私钥**仅存在于客户端**配置或密钥链；本库只接收内存中的私钥对象或路径，**日志中不得打印**私钥与完整 `signature`。
 - `payload` 为明文 JSON 字符串，仅用于签名与传输；不含记忆正文。
 - 与 MMEM 设计一致：记忆密文通过 Git 传输，服务端不解析 PNMS 明文。
+- **注册与记忆密钥材料**见 **第 11 节**（`encrypted_password`、`key_fingerprint` 与 `gen_register_bundle.py` 的 SHA-256 约定；记忆载荷 AES-256-GCM）。
 
 ---
 
@@ -287,6 +288,83 @@ CLI 将 **PNMS 给出的 `context`** 与用户 **query** 拼入 Ollama 的 user 
 
 ---
 
-## 11. 小结
+## 11. 注册口令、私钥材料与记忆加密（与 `mindmemory/tools/gen_register_bundle.py` 对齐）
+
+本节固定 **客户端侧** 的口令语义、算法与参考实现，供 `mmem sync push`、插件与 MMEM 文档交叉引用。业务背景亦见 `mindmemory/docs/requirements.md`（本地随机对称口令、私钥相关保护、零知识）。
+
+### 11.1 概念关系（目标语义）
+
+| 对象 | 说明 |
+|------|------|
+| **记忆对称口令 `P_mem`** | 用于 AES 加密「要上云的记忆载荷」（Git 仓库内文件或 API blob）。宜为**密码学随机**生成（CSPRNG），**不在服务端以明文存储**。 |
+| **私钥派生材料 `K_seed`** | 仅持有 **OpenSSH 私钥 PEM 字符串** 的用户可重现；用于从本地派生保护 `P_mem` 的密钥，或作为账号绑定摘要。 |
+| **云上存储** | 服务端存 `users.encrypted_password` 等字段；**服务端不解密记忆明文**，仅持久化密文与元数据。 |
+
+**产品层目标流程**（与 requirements 一致）：
+
+1. 注册/初始化时客户端生成 **随机 `P_mem`**（或由用户策略轮换）。  
+2. 需要与账号绑定并同步到云端时：将 `P_mem`（或等价秘密）用 **由 `K_seed` 派生的对称密钥** 加密后再写入数据库/配置；新设备仅凭 **本地私钥** 重算 `K_seed` → 解密得到 `P_mem` → 再解密记忆文件。  
+3. **解密密钥链**：根信任为 **用户私钥**；**`K_seed` 定义为对私钥材料的单向摘要**（见下节），不传输私钥本身。
+
+### 11.2 参考实现：`gen_register_bundle.py`（当前注册 bundle）
+
+仓库内 **`mindmemory/tools/gen_register_bundle.py`** 为权威参考，与 `POST /api/v1/auth/setup-key` 字段直接对应。
+
+| 字段 | 算法与输入 | 输出形式 |
+|------|------------|----------|
+| `key_fingerprint` | **SHA-256**：对 OpenSSH `public_key` 行中 **base64 解码后的公钥 blob**（不含类型与注释）做哈希 | **64 字符小写 hex** |
+| `encrypted_password` | **SHA-256**：对 **完整 OpenSSH 私钥 PEM 字符串**（`ssh_private_key`，UTF-8 字节）做哈希 | **64 字符小写 hex** |
+
+说明（与脚本注释一致）：
+
+- 字段名 **`encrypted_password`** 在库中存的是 **私钥可重现的确定性摘要** `hex(SHA256(privkey_PEM))`，便于仅凭私钥在多设备重算同一值；**服务端当前不对该字段做解密运算**。  
+- 该摘要 **即文档中所说的「私钥 hash」在实现上的落点**（对 **私钥 PEM 全文** 的 SHA-256，而非对公钥或单独随机数的加密密文）。  
+- 脚本注明：该值**可用于未来派生本地对称口令**；若演进为「随机 `P_mem` + AES 包裹后再入库」，应在客户端增加 **版本字段**，并与下节 **记忆文件 AES** 约定一致。
+
+**私钥哈希（本设计用语）**：特指 **`K_seed = SHA256(OpenSSH_private_key_PEM_utf8)` → 32 字节**；对外展示为 **hex 64 字符** 时与 `encrypted_password` 字段内容一致。
+
+### 11.3 记忆文件与载荷加密（与 openclaw-mmem / MMEM 对齐）
+
+对实际上传 Git 或 API 的记忆二进制/文本载荷，密文侧约定见 `openclaw-mmem/docs/mmem记忆文件结构.md`：
+
+| 用途 | 算法 | 说明 |
+|------|------|------|
+| 记忆 blob | **AES-256-GCM** | 12 字节随机 **nonce**；密文格式 `nonce ‖ ciphertext ‖ tag`，整体 **Base64** 传输或落盘。 |
+| 对称密钥来源 | **由实现定义** | 推荐：`P_mem = CSPRNG()` 首次生成；或 `P_mem = HKDF-SHA256(ikm=K_seed, salt=..., info="mmem-memory-v1")`；多设备同步依赖 §11.2 的私钥与（可选）云上加密包裹字段。 |
+
+**Ed25519（同步 API）**：`begin-submit` / `mark-completed` 的 `payload` + `signature` 使用用户私钥签名，与 `mindmemory/tests/test_integration_flow.py` 一致（**非** SHA256 摘要字段）。
+
+### 11.4 端到端流程（简图）
+
+```mermaid
+flowchart LR
+  subgraph reg["注册 / setup-key"]
+    SK[OpenSSH 私钥 PEM]
+    FP["key_fingerprint = hex SHA256(pub blob)"]
+    EP["encrypted_password = hex SHA256(SK)"]
+    SK --> FP
+    SK --> EP
+  end
+  subgraph mem["记忆上云"]
+    Pmem["P_mem 随机或 HKDF K_seed"]
+    AES["AES-256-GCM"]
+    Git["Git push 密文"]
+    Pmem --> AES
+    AES --> Git
+  end
+  EP -.->|"K_seed 材料"| Pmem
+```
+
+### 11.5 与 mindmemory-client / `mmem sync push` 的落地
+
+- 库与 CLI 在实现 **`mmem sync push`** 时，应：  
+  1. 从用户私钥文件重算 **`K_seed` / `encrypted_password` 与 gen_register_bundle 一致**（可单元测试字节级对比）；  
+  2. 按产品选择使用 **随机 `P_mem`** 或 **HKDF(K_seed)** 作为 AES-256-GCM 密钥材料；  
+  3. 对 PNMS/序列化产物加密后写入 Git 工作树，再 **`begin-submit` → push → `mark-completed`**。  
+- 若仅验证账号绑定、不加密记忆，可直接比对 `encrypted_password` 与注册时上传值（不推荐用于生产记忆保护）。
+
+---
+
+## 12. 小结
 
 **mindmemory-client** 是 **PNMS** 与 **MindMemory Web API** 之间的粘合层：统一 PNMS 多 Agent 持久化布局、同步接口的 Ed25519 签名与 HTTP 访问，并在对话轮次中提供「长期记忆上下文 + 当前轮内容 → LLM」的编排能力。**配套 CLI（`mmem-cli`）** 以「**与 LLM 聊天 → 对话中形成记忆 → 同步到 MindMemory**」为主功能，在无 Claw 环境下承担联调与自有终端客户端入口；`doctor` 等为辅，与 Claw 插件共享同一库，实现可复用、可测试、与具体 Claw 解耦的目标。
