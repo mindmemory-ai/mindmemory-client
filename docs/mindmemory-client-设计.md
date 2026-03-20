@@ -268,11 +268,11 @@ CLI 不改变该语义，只做**终端侧的胶水**：
 
 | 模式 | 用途 |
 |------|------|
-| `mock` / `echo` | 无网络：验证 PNMS 状态机与上下文长度。 |
-| `ollama` / `openai` | 真实对话与 token 消耗观测；API Key 来自环境变量。 |
-| `stdio` | 从 stdin 读一行作为模型输出（极端调试）。 |
+| **ollama（CLI 默认）** | 本地 `http://127.0.0.1:11434/api/chat`，模型名默认 `llama3.2`；可用 `~/.config/mmem/config.toml` 定义**多 profile**（`[[llm.profiles]]` 或 `[llm.profiles.xxx]`），`mmem chat -p <name>` 切换；环境变量 `MMEM_OLLAMA_URL`、`MMEM_OLLAMA_MODEL`、`MMEM_LLM_PROFILE` 覆盖文件。 |
+| `mock` / `echo` | 无大模型：验证 PNMS 状态机与上下文长度。 |
+| `openai` 兼容（后续） | HTTP API Key；可与 profile 并列演进。 |
 
-CLI 负责把 **PNMS 给出的 `context` 字符串** 与 **system_prompt、user query** 组合成最终 prompt；具体模板可在 CLI 层暴露 `--system` 文件或默认短 system 句。
+CLI 将 **PNMS 给出的 `context`** 与用户 **query** 拼入 Ollama 的 user 消息；`mmem doctor` 会探测 **Ollama `/api/tags`**。示例配置见 `docs/config.example.toml`。
 
 ### 10.6 与「自有客户端」产品线的关系
 
