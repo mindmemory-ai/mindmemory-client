@@ -1,0 +1,26 @@
+# 复制到 ~/.config/mmem/config.toml 并按需修改
+# 环境变量可覆盖：MMEM_OLLAMA_URL、MMEM_OLLAMA_MODEL、MMEM_LLM_PROFILE、MMEM_CONFIG_PATH
+
+[llm]
+default_profile = "default"
+
+# 方式一：数组（推荐）
+[[llm.profiles]]
+name = "default"
+backend = "ollama"
+ollama_base_url = "http://127.0.0.1:11434"
+ollama_model = "llama3.2"
+timeout_s = 120.0
+
+[[llm.profiles]]
+name = "fast"
+backend = "ollama"
+ollama_base_url = "http://127.0.0.1:11434"
+ollama_model = "phi3"
+timeout_s = 60.0
+
+# 方式二：嵌套表（与上等价，二选一即可）
+# [llm.profiles.coder]
+# backend = "ollama"
+# ollama_model = "qwen2.5-coder"
+# ollama_base_url = "http://127.0.0.1:11434"

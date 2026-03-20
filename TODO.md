@@ -17,13 +17,14 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 - [x] `api`：`MmemApiClient` — `health`、`get_me`、`list_agents`、`begin_submit`、`mark_completed`
 - [x] `pnms_bridge`：`PnmsMemoryBridge` — 按 `user_uuid` + `agent_name` 设置 `concept_checkpoint_dir` 与 `user_id`
 - [x] `session`：`ChatMemorySession` — `handle_turn`（PNMS `handle` + `content_to_remember` 默认规则）
-- [x] 单元测试：`tests/test_sync_payload.py`
+- [x] 单元测试：`tests/test_sync_payload.py`、`tests/test_llm_profiles.py`
+- [x] `llm_profiles` + `ollama_llm`：默认 Ollama；`~/.config/mmem/config.toml` 多 profile；环境变量覆盖
 
 ## CLI `mmem`
 
-- [x] `mmem doctor` — 检查导入、`GET /health`、配置项存在性（不打印密钥）
-- [x] `mmem chat` — REPL / `-m`；`--llm mock|echo`；`--no-remote`；可选 `--sync-after` 在每轮后 begin+mark（无 git 时 `submission_ok=false` 或跳过）
-- [ ] `mmem chat` — `--llm ollama` / OpenAI 兼容（后续）
+- [x] `mmem doctor` — 依赖、MindMemory、Ollama（`/api/tags`）
+- [x] `mmem chat` — 默认 `--llm ollama`；`--profile` / `-p`；`--ollama-url`、`--model`；`mock`/`echo`；`--no-remote`
+- [x] `mmem models` — 列出已加载 profile
 - [ ] `mmem sync push` — 加密 + git worktree（与 openclaw-mmem 对齐，后续）
 
 ## 联调
