@@ -20,6 +20,7 @@ from mindmemory_client.llm_profiles import default_config_path, load_llm_profile
 from mindmemory_client.ollama_llm import build_ollama_llm, ollama_health
 
 from mmem_cli.account import account_app
+from mmem_cli.pnms_cmds import pnms_app
 
 logger = logging.getLogger(__name__)
 
@@ -656,6 +657,7 @@ def sync_ping(
 app.add_typer(sync_app, name="sync")
 app.add_typer(memory_app, name="memory")
 app.add_typer(account_app, name="account")
+app.add_typer(pnms_app, name="pnms")
 
 
 def main() -> None:

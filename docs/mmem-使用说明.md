@@ -115,6 +115,10 @@ mmem
 ├── doctor              # 环境检查
 ├── models              # 列出 LLM profile
 ├── chat                # 对话 + PNMS
+├── pnms                # 查看已保存的概念模块与记忆图（checkpoint）
+│   ├── status          # 目录 / meta / 边数摘要
+│   ├── concepts        # meta.json 与各 .pt
+│   └── graph           # graph.db 边（按权降序）
 ├── account             # 多账户：注册、登录、登出、切换、whoami
 ├── sync
 │   ├── encrypt-file    # 任意文件 → K_seed AES-GCM → Base64
@@ -132,6 +136,7 @@ mmem --help
 mmem account --help
 mmem sync --help
 mmem memory --help
+mmem pnms --help
 ```
 
 ---
@@ -178,6 +183,12 @@ mmem memory --help
 | `--config` | `config.toml` 路径 |
 
 解析结果无 `user_uuid` 时，本地 PNMS 使用占位用户 `local-dev-user`。
+
+### 8.1 `mmem pnms`（概念图与记忆图）
+
+查看当前 **user + agent** 对应 checkpoint 目录下**已落盘**的内容：**概念模块**（`meta.json`、各 `*.pt`）与**记忆图**（SQLite `graph.db`）。子命令：`status`（摘要）、`concepts`（meta 与文件列表）、`graph`（按边权列出前 N 条边，`--limit`）。共用 `--agent`、`--user`（覆盖 `user_uuid`）、`--json`。
+
+说明：PNMS 当前实现中**记忆槽**不写入该目录，仅保存在进程内；目录中的图与概念来自各轮对话结束时的 `save_checkpoint`。
 
 ---
 
