@@ -17,6 +17,11 @@ from mindmemory_client.register_crypto import (
     k_seed_bytes_from_private_key_openssh,
 )
 from mindmemory_client.session import ChatMemorySession
+from mindmemory_client.client_home import default_client_home
+from mindmemory_client.client_state import resolve_mmem_config
+from mindmemory_client.credential_source import credential_source
+from mindmemory_client.settings import ClientEnvSettings, get_client_settings
+from mindmemory_client.logging_config import configure_client_logging
 
 __all__ = [
     "MindMemoryClientConfig",
@@ -33,4 +38,10 @@ __all__ = [
     "decrypt_memory_payload",
     "encrypt_memory_base64",
     "decrypt_memory_base64",
+    "default_client_home",
+    "resolve_mmem_config",
+    "ClientEnvSettings",
+    "get_client_settings",
+    "credential_source",
+    "configure_client_logging",
 ]

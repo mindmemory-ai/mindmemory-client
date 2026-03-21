@@ -85,6 +85,8 @@
 
 环境变量前缀建议：`MMEM_`（与后端、测试习惯一致，如 `MMEM_BASE_URL`）。
 
+身份解析由 **`MMEM_CREDENTIAL_SOURCE`**（`account` \| `env` \| `none`）统一约定：`account` 时 `user_uuid`/私钥仅来自本地多账户目录与 `state.json`；`env` 时仅来自 `MMEM_USER_UUID` + `MMEM_PRIVATE_KEY_PATH`；避免与 `.env` 混写产生歧义（见 `docs/mmem-使用说明.md` §3.1）。
+
 ---
 
 ## 5. 模块划分（建议包结构）
@@ -259,7 +261,7 @@ CLI 不改变该语义，只做**终端侧的胶水**：
 
 - **位置**：与 `mindmemory_client` 同仓库，例如 `mmem_cli/` 包或 `src/mmem_cli`，在 `pyproject.toml` 中注册 `project.scripts`：`mmem = "mmem_cli.main:app"`（若用 Typer/Click）。
 - **依赖**：`mindmemory-client`（workspace 可编辑安装）、终端增强可选 `rich`、`typer` 或 `click`；**不**把 OpenClaw 列入依赖。
-- **配置**：与第 4 节共用环境变量与配置文件；CLI 可额外支持 `--profile` 或 `~/.config/mmem/config.toml`（路径仅作建议，实现时统一一种）。
+- **配置**：与第 4 节共用环境变量与配置文件；CLI 可额外支持 `--profile` 或 `~/.mindmemory/config.toml`（路径仅作建议，实现时统一一种）。
 
 ### 10.4 命令谱系（建议）
 
@@ -282,7 +284,7 @@ CLI 不改变该语义，只做**终端侧的胶水**：
 
 | 模式 | 用途 |
 |------|------|
-| **ollama（CLI 默认）** | 本地 `http://127.0.0.1:11434/api/chat`，模型名默认 `llama3.2`；可用 `~/.config/mmem/config.toml` 定义**多 profile**（`[[llm.profiles]]` 或 `[llm.profiles.xxx]`），`mmem chat -p <name>` 切换；环境变量 `MMEM_OLLAMA_URL`、`MMEM_OLLAMA_MODEL`、`MMEM_LLM_PROFILE` 覆盖文件。 |
+| **ollama（CLI 默认）** | 本地 `http://127.0.0.1:11434/api/chat`，模型名默认 `llama3.2`；可用 `~/.mindmemory/config.toml` 定义**多 profile**（`[[llm.profiles]]` 或 `[llm.profiles.xxx]`），`mmem chat -p <name>` 切换；环境变量 `MMEM_OLLAMA_URL`、`MMEM_OLLAMA_MODEL`、`MMEM_LLM_PROFILE` 覆盖文件。 |
 | `mock` / `echo` | 无大模型：验证 PNMS 状态机与上下文长度。 |
 | `openai` 兼容（后续） | HTTP API Key；可与 profile 并列演进。 |
 

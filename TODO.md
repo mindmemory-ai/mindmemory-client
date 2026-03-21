@@ -18,7 +18,7 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 - [x] `pnms_bridge`：`PnmsMemoryBridge` — 按 `user_uuid` + `agent_name` 设置 `concept_checkpoint_dir` 与 `user_id`
 - [x] `session`：`ChatMemorySession` — `handle_turn`（PNMS `handle` + `content_to_remember` 默认规则）
 - [x] 单元测试：`tests/test_sync_payload.py`、`tests/test_llm_profiles.py`、`tests/test_register_crypto.py`、`tests/test_memory_crypto.py`
-- [x] `llm_profiles` + `ollama_llm`：默认 Ollama；`~/.config/mmem/config.toml` 多 profile；环境变量覆盖
+- [x] `llm_profiles` + `ollama_llm`：默认 Ollama；`~/.mindmemory/config.toml` 多 profile；环境变量覆盖
 
 ### 加密与注册材料（见设计文档 §11、`mindmemory/tools/gen_register_bundle.py`）
 

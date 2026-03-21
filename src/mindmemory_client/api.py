@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 from mindmemory_client.config import MindMemoryClientConfig
 from mindmemory_client.errors import MindMemoryAPIError
@@ -33,7 +36,9 @@ class MmemApiClient:
         self.close()
 
     def health(self) -> dict[str, Any]:
-        r = self._client.get(f"{self._root}/health")
+        url = f"{self._root}/health"
+        logger.debug("GET %s", url)
+        r = self._client.get(url)
         if r.status_code != 200:
             raise MindMemoryAPIError(
                 f"health 失败: {r.status_code}", status_code=r.status_code, detail=r.text
@@ -41,16 +46,31 @@ class MmemApiClient:
         return r.json() if r.content else {}
 
     def get_me(self, user_uuid: str) -> dict[str, Any]:
+        url = f"{self._api}/me"
+        logger.debug("GET %s", url)
         r = self._client.get(
-            f"{self._api}/me",
+            url,
             headers={"X-User-UUID": user_uuid},
         )
         self._raise_for_status(r)
         return r.json()
 
     def list_agents(self, user_uuid: str) -> dict[str, Any]:
+        url = f"{self._api}/agents"
+        logger.debug("GET %s", url)
         r = self._client.get(
-            f"{self._api}/agents",
+            url,
+            headers={"X-User-UUID": user_uuid},
+        )
+        self._raise_for_status(r)
+        return r.json()
+
+    def get_encrypted_private_key_backup(self, user_uuid: str) -> dict[str, Any]:
+        """换机恢复：获取注册时上传的私钥备份密文（opaque JSON）。"""
+        url = f"{self._api}/me/encrypted-private-key-backup"
+        logger.debug("GET %s", url)
+        r = self._client.get(
+            url,
             headers={"X-User-UUID": user_uuid},
         )
         self._raise_for_status(r)
@@ -76,7 +96,9 @@ class MmemApiClient:
         }
         if holder_info is not None:
             body["holder_info"] = holder_info
-        r = self._client.post(f"{self._api}/sync/begin-submit", json=body)
+        url = f"{self._api}/sync/begin-submit"
+        logger.debug("POST %s", url)
+        r = self._client.post(url, json=body)
         self._raise_for_status(r)
         return r.json()
 
@@ -100,8 +122,10 @@ class MmemApiClient:
             user_uuid, agent_name, lock_uuid, commit_for_payload or ""
         )
         sig = sign_payload(payload, priv)
+        url = f"{self._api}/sync/mark-completed"
+        logger.debug("POST %s", url)
         r = self._client.post(
-            f"{self._api}/sync/mark-completed",
+            url,
             json={
                 "user_uuid": user_uuid,
                 "agent_name": agent_name,

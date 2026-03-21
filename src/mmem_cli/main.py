@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import subprocess
 import sys
 import tarfile
@@ -12,10 +13,15 @@ from typing import Optional
 
 import typer
 
+from mindmemory_client.client_state import resolve_mmem_config
 from mindmemory_client.config import MindMemoryClientConfig
 from mindmemory_client.errors import MindMemoryAPIError
 from mindmemory_client.llm_profiles import default_config_path, load_llm_profiles_from_toml, resolve_profile
 from mindmemory_client.ollama_llm import build_ollama_llm, ollama_health
+
+from mmem_cli.account import account_app
+
+logger = logging.getLogger(__name__)
 
 app = typer.Typer(no_args_is_help=True, help="MindMemory 客户端：PNMS + MMEM API；默认 Ollama")
 
@@ -71,9 +77,7 @@ def doctor(
     except ImportError:
         typer.echo("pnms: 未安装（请先 pip install -e ../pnms）", err=True)
 
-    cfg = MindMemoryClientConfig()
-    if base_url:
-        cfg = cfg.model_copy(update={"base_url": base_url})
+    cfg = resolve_mmem_config(base_url_override=base_url)
     url = cfg.base_url.rstrip("/")
     typer.echo(f"MMEM_BASE_URL: {url}")
 
@@ -88,19 +92,40 @@ def doctor(
     except Exception as e:
         typer.echo(f"MindMemory /health: 不可用（{e}）", err=True)
 
+    from mindmemory_client.client_paths import client_config_dir, default_pnms_data_root
+    from mindmemory_client.client_state import load_state
+    from mindmemory_client.credential_source import credential_source
+
+    src = credential_source()
+    typer.echo(f"MMEM_CREDENTIAL_SOURCE: {src}（account=多账户目录 | env=环境变量 | none=无远端身份）")
+    typer.echo(f"客户端配置目录: {client_config_dir()}")
+    st = load_state()
+    if st.current_account_uuid:
+        typer.echo(f"当前账户（state）: {st.current_account_uuid}")
+    else:
+        typer.echo("当前账户（state）: 未选择（account 模式可用 mmem account login）")
+    typer.echo(f"默认 PNMS 根（无 MMEM_PNMS_DATA_ROOT 时）: {default_pnms_data_root()}")
+
     if cfg.user_uuid:
-        typer.echo(f"MMEM_USER_UUID: 已设置（长度 {len(cfg.user_uuid)}）")
+        typer.echo(f"解析后 user_uuid: 已设置（长度 {len(cfg.user_uuid)}）")
     else:
-        typer.echo("MMEM_USER_UUID: 未设置（仅本地 PNMS 时可忽略）")
+        typer.echo("解析后 user_uuid: 未设置（仅本地 PNMS 时可忽略）")
     if cfg.private_key_path:
-        typer.echo(f"MMEM_PRIVATE_KEY_PATH: {cfg.private_key_path}")
+        typer.echo(f"解析后私钥: {cfg.private_key_path}")
     else:
-        typer.echo("MMEM_PRIVATE_KEY_PATH: 未设置（sync API 需要）")
+        typer.echo("解析后私钥: 未设置（sync 需 account 登录或 MMEM_CREDENTIAL_SOURCE=env）")
 
     llm_cfg = load_llm_profiles_from_toml(config_path)
     prof = resolve_profile(llm_cfg, None)
     typer.echo(f"配置文件: {config_path or default_config_path()}（存在则已加载多模型）")
     typer.echo(f"当前默认 LLM profile: {llm_cfg.default_profile} → {prof.ollama_model} @ {prof.ollama_base_url}")
+
+    from mindmemory_client.env_loader import get_env
+
+    _lv = (get_env("MMEM_LOG_LEVEL") or "").strip() or "INFO"
+    typer.echo(f"MMEM_LOG_LEVEL: {_lv}（未设置时按 INFO）")
+    _lf = get_env("MMEM_LOG_FILE")
+    typer.echo(f"MMEM_LOG_FILE: {_lf or '（未设置，仅 stderr）'}")
     try:
         tags = ollama_health(prof.ollama_base_url)
         models = tags.get("models") or []
@@ -156,15 +181,14 @@ def chat(
         typer.echo(f"导入失败: {e}（请先 pip install -e ../pnms）", err=True)
         raise typer.Exit(1)
 
-    cfg = MindMemoryClientConfig()
-    if base_url:
-        cfg = cfg.model_copy(update={"base_url": base_url})
+    cfg = resolve_mmem_config(base_url_override=base_url)
     cfg = cfg.model_copy(update={"agent_name": agent})
 
     uid = cfg.user_uuid or "local-dev-user"
     bridge = PnmsMemoryBridge(cfg.pnms_data_root, uid, agent)
     session = ChatMemorySession(bridge)
     llm_fn = _build_llm_callback(llm_mode, profile, ollama_url, model, config_path)
+    logger.info("mmem chat agent=%s llm_mode=%s user=%s", agent, llm_mode, uid)
 
     if llm_mode == "ollama":
         p = resolve_profile(load_llm_profiles_from_toml(config_path), profile, ollama_url_override=ollama_url, ollama_model_override=model)
@@ -286,7 +310,8 @@ def _resolve_pnms_dir_for_push(
         return pack_pnms
     if not cfg.user_uuid:
         typer.echo(
-            "请指定 --pack-pnms，或设置 MMEM_USER_UUID 以使用默认 PNMS 目录 "
+            "请指定 --pack-pnms，或在 account 模式下 mmem account login；"
+            f"或 MMEM_CREDENTIAL_SOURCE=env 且设置 MMEM_USER_UUID 以使用默认目录 "
             f"（{cfg.pnms_data_root}/<user>/<agent>/）",
             err=True,
         )
@@ -383,7 +408,7 @@ def sync_push(
         exists=True,
         file_okay=False,
         dir_okay=True,
-        help="要打包的 PNMS 数据目录；默认使用 MMEM_PNMS_DATA_ROOT/<user>/<agent>/（需 MMEM_USER_UUID）",
+        help="要打包的 PNMS 目录；默认使用解析到的 user_uuid 与 MMEM_PNMS_DATA_ROOT/<user>/<agent>/",
     ),
 ) -> None:
     """
@@ -398,11 +423,13 @@ def sync_push(
     from mindmemory_client.keys import read_openssh_private_key_pem
     from mindmemory_client.register_crypto import k_seed_bytes_from_private_key_openssh
 
-    cfg = MindMemoryClientConfig()
-    if base_url:
-        cfg = cfg.model_copy(update={"base_url": base_url})
+    cfg = resolve_mmem_config(base_url_override=base_url)
     if not cfg.private_key_path:
-        typer.echo("需要 MMEM_PRIVATE_KEY_PATH", err=True)
+        typer.echo(
+            "需要私钥：MMEM_CREDENTIAL_SOURCE=env 且设置 MMEM_PRIVATE_KEY_PATH，"
+            "或 MMEM_CREDENTIAL_SOURCE=account（默认）且 mmem account login。",
+            err=True,
+        )
         raise typer.Exit(1)
 
     pem = read_openssh_private_key_pem(Path(cfg.private_key_path))
@@ -421,7 +448,11 @@ def sync_push(
         return
 
     if not cfg.user_uuid:
-        typer.echo("使用 --git-dir 同步需要 MMEM_USER_UUID", err=True)
+        typer.echo(
+            "使用 --git-dir 需要 user_uuid：account 模式请 mmem account login；"
+            "或 MMEM_CREDENTIAL_SOURCE=env 且设置 MMEM_USER_UUID。",
+            err=True,
+        )
         raise typer.Exit(1)
 
     if not skip_remote_check:
@@ -604,12 +635,14 @@ def memory_merge(
 def sync_ping(
     base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
 ) -> None:
-    """调用 GET /me 与 GET /agents（需 MMEM_USER_UUID）。"""
-    cfg = MindMemoryClientConfig()
-    if base_url:
-        cfg = cfg.model_copy(update={"base_url": base_url})
+    """调用 GET /me 与 GET /agents（需解析到 user_uuid）。"""
+    cfg = resolve_mmem_config(base_url_override=base_url)
     if not cfg.user_uuid:
-        typer.echo("需要环境变量 MMEM_USER_UUID", err=True)
+        typer.echo(
+            "需要 user_uuid：account 模式请 mmem account login；"
+            "或 MMEM_CREDENTIAL_SOURCE=env 且设置 MMEM_USER_UUID。",
+            err=True,
+        )
         raise typer.Exit(1)
     from mindmemory_client.api import MmemApiClient
 
@@ -622,9 +655,13 @@ def sync_ping(
 
 app.add_typer(sync_app, name="sync")
 app.add_typer(memory_app, name="memory")
+app.add_typer(account_app, name="account")
 
 
 def main() -> None:
+    from mindmemory_client.logging_config import configure_client_logging
+
+    configure_client_logging()
     app()
 
 

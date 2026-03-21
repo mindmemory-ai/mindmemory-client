@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Callable, Optional
 
 from pnms import HandleQueryResult
+
+logger = logging.getLogger(__name__)
 
 from mindmemory_client.pnms_bridge import PnmsMemoryBridge
 
@@ -36,6 +39,11 @@ class ChatMemorySession:
         if content_to_remember is None:
             content_to_remember = f"[对话轮次] 用户：{query[:2000]}"
         sp = system_prompt if system_prompt is not None else self.system_prompt
+        logger.info(
+            "PNMS turn user=%s query_chars=%d",
+            self._bridge.user_id,
+            len(query),
+        )
         return self._bridge.pnms.handle(
             self._bridge.user_id,
             query,

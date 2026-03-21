@@ -1,23 +1,21 @@
-"""LLM 多模型配置：默认 Ollama；配置文件 ~/.config/mmem/config.toml（或 MMEM_CONFIG_PATH）。"""
+"""LLM 多模型配置：默认 Ollama；配置文件 ~/.mindmemory/config.toml（或 MMEM_CONFIG_PATH）。"""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
-def _env(name: str, default: str | None = None) -> str | None:
-    return os.environ.get(name, default)
+from mindmemory_client.client_paths import client_config_dir
+from mindmemory_client.env_loader import get_env
 
 
 def default_config_path() -> Path:
-    p = _env("MMEM_CONFIG_PATH")
+    p = get_env("MMEM_CONFIG_PATH")
     if p:
         return Path(p).expanduser()
-    return Path.home() / ".config" / "mmem" / "config.toml"
+    return client_config_dir() / "config.toml"
 
 
 class LlmProfile(BaseModel):
@@ -94,16 +92,16 @@ def resolve_profile(
     ollama_model_override: str | None = None,
 ) -> LlmProfile:
     """选取 profile。覆盖优先级：CLI > 环境变量 > 文件 > 内置。"""
-    name = profile_name or _env("MMEM_LLM_PROFILE") or cfg.default_profile
+    name = profile_name or get_env("MMEM_LLM_PROFILE") or cfg.default_profile
     prof = cfg.profiles.get(name)
     if prof is None:
         prof = cfg.profiles.get("default") or LlmProfile()
 
     d = prof.model_dump()
-    if _env("MMEM_OLLAMA_URL"):
-        d["ollama_base_url"] = _env("MMEM_OLLAMA_URL")
-    if _env("MMEM_OLLAMA_MODEL"):
-        d["ollama_model"] = _env("MMEM_OLLAMA_MODEL")
+    if get_env("MMEM_OLLAMA_URL"):
+        d["ollama_base_url"] = get_env("MMEM_OLLAMA_URL")
+    if get_env("MMEM_OLLAMA_MODEL"):
+        d["ollama_model"] = get_env("MMEM_OLLAMA_MODEL")
     if ollama_url_override:
         d["ollama_base_url"] = ollama_url_override
     if ollama_model_override:
