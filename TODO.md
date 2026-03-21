@@ -34,9 +34,9 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 - [x] `mmem models` — 列出已加载 profile
 - [x] **`mmem sync encrypt-file` / `decrypt-file`** — K_seed 加解密文件
 - [x] **`mmem sync push`** — begin-submit → 写 `mmem_payload.enc` → git add/commit/push → mark-completed（需 `--git-dir`）；无 `--git-dir` 仅生成本地密文
-- [ ] **增强**：push 前 `pull --rebase`、冲突处理；PNMS 目录打包进 bundle；与 Gogs 远端 URL 校验
+- [x] **增强**（`mmem sync push`）：默认 `git pull --rebase origin <schema>`（`--no-pull-rebase` 可关）；默认校验 `origin` URL 含 Gogs 用户名片段（`user_uuid` 去连字符，`--skip-remote-check` 可关）；`--pack-pnms DIR` 将 PNMS 目录 tar.gz 后加密为 `pnms_bundle.enc` 一并提交。冲突时 pull 失败会 `mark-completed(submission_ok=false)` 并退出。
 
-## 联调
+## 联调（需本机环境，不自动 CI）
 
-- [ ] 对真实 `MMEM_BASE_URL`：`doctor` + `chat -m "hi" --llm mock`（`--no-remote` 已可离线）
-- [ ] `MMEM_INTEGRATION=1` 全链路（需私钥与注册账号）
+- [ ] 对真实 `MMEM_BASE_URL`：手动运行 `mmem doctor` + `mmem chat -m "hi" --llm mock`（`--no-remote` 已可离线验证 PNMS）
+- [ ] `MMEM_INTEGRATION=1`（mindmemory 仓库）全链路：需 MySQL、Gogs、已注册账号与私钥

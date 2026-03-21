@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import json
 import subprocess
 import sys
+import tarfile
 import time
 from pathlib import Path
 from typing import Optional
@@ -205,6 +207,64 @@ def chat(
 sync_app = typer.Typer(help="MindMemory 同步：API、记忆 AES-GCM、git 推送")
 
 
+def _git_remote_origin_url(git_dir: Path) -> str:
+    out = subprocess.check_output(
+        ["git", "-C", str(git_dir), "remote", "get-url", "origin"],
+        text=True,
+    )
+    return out.strip()
+
+
+def _validate_remote_url_for_user(remote_url: str, user_uuid: str) -> None:
+    """Gogs 用户名为 user_uuid 去掉连字符，远端 URL 应包含该片段以防推错仓库。"""
+    needle = user_uuid.replace("-", "").lower()
+    if needle not in remote_url.lower():
+        raise ValueError(
+            f"origin 远端 URL 中未找到 Gogs 用户名片段（{needle[:12]}…），"
+            "请检查 git remote 是否指向该 user_uuid 下的仓库，或使用 --skip-remote-check 跳过。"
+        )
+
+
+def _git_pull_rebase_origin(git_dir: Path, branch: str) -> tuple[bool, str]:
+    """
+    git pull --rebase origin <branch>。
+    首次推送远端尚无分支时允许失败并继续。
+    返回 (ok, message)。
+    """
+    pr = subprocess.run(
+        ["git", "-C", str(git_dir), "pull", "--rebase", "origin", branch],
+        capture_output=True,
+        text=True,
+    )
+    err = (pr.stderr or "") + (pr.stdout or "")
+    if pr.returncode == 0:
+        return True, "pull --rebase: 已同步远端"
+    low = err.lower()
+    if any(
+        x in low
+        for x in (
+            "couldn't find remote ref",
+            "could not find remote ref",
+            "no tracking information",
+            "fatal: couldn't find remote ref",
+            "fatal: not a valid object name",
+        )
+    ):
+        return True, "pull --rebase: 跳过（远端尚无该分支或首次推送）"
+    return False, err.strip() or f"exit {pr.returncode}"
+
+
+def _pack_pnms_dir_to_encrypted_b64(pnms_dir: Path, key: bytes) -> str:
+    """将目录打成 tar.gz 后 AES-GCM 加密为 Base64 单行。"""
+    from mindmemory_client.memory_crypto import encrypt_memory_base64
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        tar.add(pnms_dir, arcname=pnms_dir.name)
+    raw = buf.getvalue()
+    return encrypt_memory_base64(raw, key)
+
+
 @sync_app.command("encrypt-file")
 def sync_encrypt_file(
     input_path: Path = typer.Argument(..., exists=True, readable=True),
@@ -272,9 +332,27 @@ def sync_push(
         help="已 init 且配置 remote 的仓库；省略则只生成当前目录 mmem_payload.enc，不调用 MMEM sync API",
     ),
     base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
+    pull_rebase: bool = typer.Option(
+        True,
+        "--pull-rebase/--no-pull-rebase",
+        help="推送前 git pull --rebase origin <schema>（首次远端无分支时会跳过）",
+    ),
+    skip_remote_check: bool = typer.Option(
+        False,
+        "--skip-remote-check",
+        help="不校验 origin URL 是否包含 user_uuid 对应的 Gogs 用户名片段",
+    ),
+    pack_pnms: Optional[Path] = typer.Option(
+        None,
+        "--pack-pnms",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        help="将 PNMS 数据目录打成 tar.gz 后加密为 pnms_bundle.enc 一并提交",
+    ),
 ) -> None:
     """
-    有 --git-dir：begin-submit → 写入加密 bundle → git commit/push → mark-completed。
+    有 --git-dir：begin-submit →（可选 pull --rebase）→ 写入加密 bundle → git commit/push → mark-completed。
     无 --git-dir：仅写入 ./mmem_payload.enc（本地准备，不占锁）。
     完整推送需 MMEM_USER_UUID、MMEM_PRIVATE_KEY_PATH、MindMemory 可达。
     """
@@ -320,15 +398,51 @@ def sync_push(
             lock_uuid = begin["lock_uuid"]
             typer.echo(f"begin-submit: lock_uuid={lock_uuid}")
 
+        if not skip_remote_check:
+            try:
+                rurl = _git_remote_origin_url(git_dir)
+                _validate_remote_url_for_user(rurl, cfg.user_uuid)
+                typer.echo(f"origin 校验通过: {rurl[:80]}{'…' if len(rurl) > 80 else ''}")
+            except (subprocess.CalledProcessError, ValueError) as e:
+                typer.echo(f"远端校验失败: {e}", err=True)
+                raise typer.Exit(1)
+
+        if pull_rebase:
+            ok, msg = _git_pull_rebase_origin(git_dir, schema)
+            typer.echo(msg if ok else f"pull --rebase 失败: {msg}", err=not ok)
+            if not ok:
+                try:
+                    with MmemApiClient(cfg) as api:
+                        api.mark_completed(
+                            cfg.user_uuid,
+                            agent,
+                            lock_uuid,
+                            False,
+                            None,
+                            f"git pull --rebase: {msg}",
+                            commit_for_payload="",
+                        )
+                except Exception:
+                    pass
+                raise typer.Exit(1)
+
         out_file.write_text(b64 + "\n", encoding="utf-8")
         typer.echo(f"已写入 {out_file}")
+
+        add_paths = ["mmem_payload.enc"]
+        if pack_pnms:
+            pnms_b64 = _pack_pnms_dir_to_encrypted_b64(pack_pnms, key)
+            pnms_file = work / "pnms_bundle.enc"
+            pnms_file.write_text(pnms_b64 + "\n", encoding="utf-8")
+            typer.echo(f"已写入 {pnms_file}（来自 {pack_pnms}）")
+            add_paths.append("pnms_bundle.enc")
 
         meta = json.dumps(
             {"memory_schema_version": schema, "client_version": "mindmemory-client"},
             ensure_ascii=False,
         )
         subprocess.run(
-            ["git", "-C", str(git_dir), "add", "mmem_payload.enc"],
+            ["git", "-C", str(git_dir), "add", *add_paths],
             check=True,
         )
         subprocess.run(
