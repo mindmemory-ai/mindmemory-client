@@ -33,8 +33,11 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 - [x] `mmem chat` — 默认 `--llm ollama`；`--profile` / `-p`；`--ollama-url`、`--model`；`mock`/`echo`；`--no-remote`
 - [x] `mmem models` — 列出已加载 profile
 - [x] **`mmem sync encrypt-file` / `decrypt-file`** — K_seed 加解密文件
-- [x] **`mmem sync push`** — begin-submit → 写 `mmem_payload.enc` → git add/commit/push → mark-completed（需 `--git-dir`）；无 `--git-dir` 仅生成本地密文
-- [x] **增强**（`mmem sync push`）：默认 `git pull --rebase origin <schema>`（`--no-pull-rebase` 可关）；默认校验 `origin` URL 含 Gogs 用户名片段（`user_uuid` 去连字符，`--skip-remote-check` 可关）；`--pack-pnms DIR` 将 PNMS 目录 tar.gz 后加密为 `pnms_bundle.enc` 一并提交。冲突时 pull 失败会 `mark-completed(submission_ok=false)` 并退出。
+- [x] **`mmem sync push`** — 仅 **`pnms_bundle.enc`**（PNMS 目录 tar.gz + K_seed AES-GCM）；无 `--git-dir` 时只写本地 `./pnms_bundle.enc`
+- [x] **推送前**：`git fetch` + 与 `origin/<schema>` 比较；**behind/diverged** 时**不占锁**并退出（exit 2），提示先 **`mmem memory merge`**
+- [x] **`mmem memory merge`** — `git fetch` + `git pull --rebase origin <schema>`（`--dry-run`）；PNMS 语义合并占位，待 PNMS 实现
+- [x] **origin 校验**：默认要求 URL 含 Gogs 用户名片段（`--skip-remote-check` 可关）
+- [x] **`--pack-pnms`**：覆盖默认 PNMS 目录（默认 `MMEM_PNMS_DATA_ROOT/<user>/<agent>/`）
 
 ## 联调（需本机环境，不自动 CI）
 

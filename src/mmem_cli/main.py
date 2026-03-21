@@ -7,7 +7,6 @@ import json
 import subprocess
 import sys
 import tarfile
-import time
 from pathlib import Path
 from typing import Optional
 
@@ -206,6 +205,8 @@ def chat(
 
 sync_app = typer.Typer(help="MindMemory 同步：API、记忆 AES-GCM、git 推送")
 
+memory_app = typer.Typer(help="PNMS 记忆（合并等）")
+
 
 def _git_remote_origin_url(git_dir: Path) -> str:
     out = subprocess.check_output(
@@ -225,33 +226,72 @@ def _validate_remote_url_for_user(remote_url: str, user_uuid: str) -> None:
         )
 
 
-def _git_pull_rebase_origin(git_dir: Path, branch: str) -> tuple[bool, str]:
-    """
-    git pull --rebase origin <branch>。
-    首次推送远端尚无分支时允许失败并继续。
-    返回 (ok, message)。
-    """
-    pr = subprocess.run(
-        ["git", "-C", str(git_dir), "pull", "--rebase", "origin", branch],
+def _git_fetch_origin(git_dir: Path) -> None:
+    subprocess.run(
+        ["git", "-C", str(git_dir), "fetch", "origin"],
+        check=True,
         capture_output=True,
         text=True,
     )
-    err = (pr.stderr or "") + (pr.stdout or "")
-    if pr.returncode == 0:
-        return True, "pull --rebase: 已同步远端"
-    low = err.lower()
-    if any(
-        x in low
-        for x in (
-            "couldn't find remote ref",
-            "could not find remote ref",
-            "no tracking information",
-            "fatal: couldn't find remote ref",
-            "fatal: not a valid object name",
-        )
+
+
+def _git_compare_with_remote(git_dir: Path, schema: str) -> str:
+    """
+    在 ``git fetch origin`` 之后比较 HEAD 与 origin/<schema>。
+    返回: no_remote_branch | up_to_date | ahead | behind | diverged
+    """
+    ref = f"origin/{schema}"
+    r = subprocess.run(
+        ["git", "-C", str(git_dir), "rev-parse", "--verify", ref],
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        return "no_remote_branch"
+
+    head = subprocess.check_output(
+        ["git", "-C", str(git_dir), "rev-parse", "HEAD"], text=True
+    ).strip()
+    remote = subprocess.check_output(
+        ["git", "-C", str(git_dir), "rev-parse", ref], text=True
+    ).strip()
+    if head == remote:
+        return "up_to_date"
+
+    if (
+        subprocess.run(
+            ["git", "-C", str(git_dir), "merge-base", "--is-ancestor", head, remote],
+            capture_output=True,
+        ).returncode
+        == 0
     ):
-        return True, "pull --rebase: 跳过（远端尚无该分支或首次推送）"
-    return False, err.strip() or f"exit {pr.returncode}"
+        return "behind"
+    if (
+        subprocess.run(
+            ["git", "-C", str(git_dir), "merge-base", "--is-ancestor", remote, head],
+            capture_output=True,
+        ).returncode
+        == 0
+    ):
+        return "ahead"
+    return "diverged"
+
+
+def _resolve_pnms_dir_for_push(
+    cfg: MindMemoryClientConfig, agent: str, pack_pnms: Optional[Path]
+) -> Path:
+    from mindmemory_client.pnms_bridge import resolve_pnms_data_dir
+
+    if pack_pnms is not None:
+        return pack_pnms
+    if not cfg.user_uuid:
+        typer.echo(
+            "请指定 --pack-pnms，或设置 MMEM_USER_UUID 以使用默认 PNMS 目录 "
+            f"（{cfg.pnms_data_root}/<user>/<agent>/）",
+            err=True,
+        )
+        raise typer.Exit(1)
+    return resolve_pnms_data_dir(cfg.pnms_data_root, cfg.user_uuid, agent)
 
 
 def _pack_pnms_dir_to_encrypted_b64(pnms_dir: Path, key: bytes) -> str:
@@ -329,14 +369,9 @@ def sync_push(
     git_dir: Optional[Path] = typer.Option(
         None,
         "--git-dir",
-        help="已 init 且配置 remote 的仓库；省略则只生成当前目录 mmem_payload.enc，不调用 MMEM sync API",
+        help="已 init 且配置 remote 的仓库；省略则只写入当前目录 pnms_bundle.enc，不调用 MMEM sync API",
     ),
     base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
-    pull_rebase: bool = typer.Option(
-        True,
-        "--pull-rebase/--no-pull-rebase",
-        help="推送前 git pull --rebase origin <schema>（首次远端无分支时会跳过）",
-    ),
     skip_remote_check: bool = typer.Option(
         False,
         "--skip-remote-check",
@@ -348,17 +383,19 @@ def sync_push(
         exists=True,
         file_okay=False,
         dir_okay=True,
-        help="将 PNMS 数据目录打成 tar.gz 后加密为 pnms_bundle.enc 一并提交",
+        help="要打包的 PNMS 数据目录；默认使用 MMEM_PNMS_DATA_ROOT/<user>/<agent>/（需 MMEM_USER_UUID）",
     ),
 ) -> None:
     """
-    有 --git-dir：begin-submit →（可选 pull --rebase）→ 写入加密 bundle → git commit/push → mark-completed。
-    无 --git-dir：仅写入 ./mmem_payload.enc（本地准备，不占锁）。
-    完整推送需 MMEM_USER_UUID、MMEM_PRIVATE_KEY_PATH、MindMemory 可达。
+    仅推送 **PNMS 目录** 经 tar.gz + AES-GCM（K_seed）后的 ``pnms_bundle.enc``，不再生成占位 ``mmem_payload.enc``。
+
+    有 ``--git-dir``：先 ``git fetch`` 并比较与 ``origin/<schema>``；若远端更新或分叉则**不占用同步锁**并退出，
+    需先执行 ``mmem memory merge`` 完成 Git 对齐与（未来）PNMS 合并后再推送。
+
+    无 ``--git-dir``：仅生成本地 ``./pnms_bundle.enc``，不占锁。
     """
     from mindmemory_client.api import MmemApiClient
     from mindmemory_client.keys import read_openssh_private_key_pem
-    from mindmemory_client.memory_crypto import encrypt_memory_base64
     from mindmemory_client.register_crypto import k_seed_bytes_from_private_key_openssh
 
     cfg = MindMemoryClientConfig()
@@ -370,26 +407,49 @@ def sync_push(
 
     pem = read_openssh_private_key_pem(Path(cfg.private_key_path))
     key = k_seed_bytes_from_private_key_openssh(pem)
-    body = {
-        "mmem_client_bundle": 1,
-        "ts": int(time.time()),
-        "agent_name": agent,
-        "schema": schema,
-    }
-    b64 = encrypt_memory_base64(json.dumps(body, ensure_ascii=False).encode("utf-8"), key)
+    pnms_src = _resolve_pnms_dir_for_push(cfg, agent, pack_pnms)
+    pnms_src.mkdir(parents=True, exist_ok=True)
+    bundle_b64 = _pack_pnms_dir_to_encrypted_b64(pnms_src, key)
 
     work = Path(git_dir) if git_dir else Path.cwd()
-    out_file = work / "mmem_payload.enc"
+    out_file = work / "pnms_bundle.enc"
 
     if not git_dir:
-        out_file.write_text(b64 + "\n", encoding="utf-8")
-        typer.echo(f"已写入 {out_file}")
-        typer.echo("未使用 --git-dir：未调用 begin-submit。将本文件复制到仓库后手动同步，或再次运行并加 --git-dir。")
+        out_file.write_text(bundle_b64 + "\n", encoding="utf-8")
+        typer.echo(f"已写入 {out_file}（PNMS 来源: {pnms_src}）")
+        typer.echo("未使用 --git-dir：未调用 begin-submit。复制到仓库后执行 mmem sync push --git-dir … 完成上传。")
         return
 
     if not cfg.user_uuid:
         typer.echo("使用 --git-dir 同步需要 MMEM_USER_UUID", err=True)
         raise typer.Exit(1)
+
+    if not skip_remote_check:
+        try:
+            rurl = _git_remote_origin_url(git_dir)
+            _validate_remote_url_for_user(rurl, cfg.user_uuid)
+            typer.echo(f"origin 校验通过: {rurl[:80]}{'…' if len(rurl) > 80 else ''}")
+        except (subprocess.CalledProcessError, ValueError) as e:
+            typer.echo(f"远端校验失败: {e}", err=True)
+            raise typer.Exit(1)
+
+    try:
+        _git_fetch_origin(git_dir)
+    except subprocess.CalledProcessError as e:
+        typer.echo(f"git fetch 失败: {e}", err=True)
+        raise typer.Exit(1)
+
+    rel = _git_compare_with_remote(git_dir, schema)
+    typer.echo(f"与 origin/{schema} 比较: {rel}")
+    if rel in ("behind", "diverged"):
+        typer.echo(
+            "远端已有较新或分叉提交，已中止推送（未占用同步锁）。\n"
+            "请先在同一仓库执行：\n"
+            f"  mmem memory merge --git-dir {git_dir} --schema {schema}\n"
+            "手动处理冲突并（未来由 PNMS 完成）合并本地 PNMS 数据后，再执行 mmem sync push。",
+            err=True,
+        )
+        raise typer.Exit(2)
 
     lock_uuid = ""
     try:
@@ -398,51 +458,19 @@ def sync_push(
             lock_uuid = begin["lock_uuid"]
             typer.echo(f"begin-submit: lock_uuid={lock_uuid}")
 
-        if not skip_remote_check:
-            try:
-                rurl = _git_remote_origin_url(git_dir)
-                _validate_remote_url_for_user(rurl, cfg.user_uuid)
-                typer.echo(f"origin 校验通过: {rurl[:80]}{'…' if len(rurl) > 80 else ''}")
-            except (subprocess.CalledProcessError, ValueError) as e:
-                typer.echo(f"远端校验失败: {e}", err=True)
-                raise typer.Exit(1)
-
-        if pull_rebase:
-            ok, msg = _git_pull_rebase_origin(git_dir, schema)
-            typer.echo(msg if ok else f"pull --rebase 失败: {msg}", err=not ok)
-            if not ok:
-                try:
-                    with MmemApiClient(cfg) as api:
-                        api.mark_completed(
-                            cfg.user_uuid,
-                            agent,
-                            lock_uuid,
-                            False,
-                            None,
-                            f"git pull --rebase: {msg}",
-                            commit_for_payload="",
-                        )
-                except Exception:
-                    pass
-                raise typer.Exit(1)
-
-        out_file.write_text(b64 + "\n", encoding="utf-8")
-        typer.echo(f"已写入 {out_file}")
-
-        add_paths = ["mmem_payload.enc"]
-        if pack_pnms:
-            pnms_b64 = _pack_pnms_dir_to_encrypted_b64(pack_pnms, key)
-            pnms_file = work / "pnms_bundle.enc"
-            pnms_file.write_text(pnms_b64 + "\n", encoding="utf-8")
-            typer.echo(f"已写入 {pnms_file}（来自 {pack_pnms}）")
-            add_paths.append("pnms_bundle.enc")
+        out_file.write_text(bundle_b64 + "\n", encoding="utf-8")
+        typer.echo(f"已写入 {out_file}（PNMS 来源: {pnms_src}）")
 
         meta = json.dumps(
-            {"memory_schema_version": schema, "client_version": "mindmemory-client"},
+            {
+                "memory_schema_version": schema,
+                "client_version": "mindmemory-client",
+                "bundle": "pnms_bundle.enc",
+            },
             ensure_ascii=False,
         )
         subprocess.run(
-            ["git", "-C", str(git_dir), "add", *add_paths],
+            ["git", "-C", str(git_dir), "add", "pnms_bundle.enc"],
             check=True,
         )
         subprocess.run(
@@ -452,7 +480,7 @@ def sync_push(
                 str(git_dir),
                 "commit",
                 "-m",
-                "mmem cli bundle",
+                "mmem: sync PNMS bundle",
                 "-m",
                 f"MMEM_META: {meta}",
             ],
@@ -520,6 +548,58 @@ def sync_push(
         raise typer.Exit(1)
 
 
+@memory_app.command("merge")
+def memory_merge(
+    git_dir: Path = typer.Option(
+        ...,
+        "--git-dir",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        help="已配置 origin 的本地 Git 仓库",
+    ),
+    schema: str = typer.Option(
+        "v1",
+        "--schema",
+        help="与 mmem sync push 一致的分支名（memory_schema_version）",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="仅打印将执行的命令，不修改仓库"),
+) -> None:
+    """
+    拉取远端并尝试 ``git pull --rebase origin <schema>``，使本地与远端提交历史对齐。
+
+    **PNMS 语义合并**（权重/图/槽等）尚未在库内实现：当前仅处理 Git 层。
+    合并后请将远端 ``pnms_bundle.enc`` 解密并与本地 PNMS 目录协调（或等待 PNMS 提供合并 API）。
+    """
+    if dry_run:
+        typer.echo(f"将执行: git -C {git_dir} fetch origin")
+        typer.echo(f"将执行: git -C {git_dir} pull --rebase origin {schema}")
+        return
+    try:
+        subprocess.run(
+            ["git", "-C", str(git_dir), "fetch", "origin"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        typer.echo(f"git fetch 失败: {e}", err=True)
+        raise typer.Exit(1)
+    pr = subprocess.run(
+        ["git", "-C", str(git_dir), "pull", "--rebase", "origin", schema],
+        capture_output=True,
+        text=True,
+    )
+    if pr.returncode != 0:
+        typer.echo((pr.stderr or "") + (pr.stdout or ""), err=True)
+        typer.echo(
+            "pull --rebase 失败。请手动解决冲突后再次执行本命令，再运行 mmem sync push。",
+            err=True,
+        )
+        raise typer.Exit(1)
+    typer.echo("Git 已与远端对齐。请确认 PNMS 数据与 pnms_bundle.enc 的合并策略后再执行 mmem sync push。")
+
+
 @sync_app.command("ping")
 def sync_ping(
     base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
@@ -541,6 +621,7 @@ def sync_ping(
 
 
 app.add_typer(sync_app, name="sync")
+app.add_typer(memory_app, name="memory")
 
 
 def main() -> None:

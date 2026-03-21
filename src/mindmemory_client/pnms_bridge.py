@@ -14,6 +14,11 @@ def _safe_segment(name: str) -> str:
     return s[:200] if s else "default"
 
 
+def resolve_pnms_data_dir(pnms_data_root: Path, user_uuid: str, agent_name: str) -> Path:
+    """与 PnmsMemoryBridge 一致的 PNMS 数据目录：``{root}/{user}/{agent}/``。"""
+    return Path(pnms_data_root) / _safe_segment(user_uuid) / _safe_segment(agent_name)
+
+
 class _LocalPnmsClient(PNMSClient):
     """
     与 PNMSClient 相同，但 get_engine 时传入 SimpleQueryEncoder，
@@ -53,7 +58,7 @@ class PnmsMemoryBridge:
         self.user_uuid = user_uuid
         self.agent_name = agent_name
         self.user_id = f"{user_uuid}::{agent_name}"
-        root = Path(pnms_data_root) / _safe_segment(user_uuid) / _safe_segment(agent_name)
+        root = resolve_pnms_data_dir(Path(pnms_data_root), user_uuid, agent_name)
         root.mkdir(parents=True, exist_ok=True)
         base = pnms_config or PNMSConfig()
         cfg = PNMSConfig.from_dict(base.to_dict())

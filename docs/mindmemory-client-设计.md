@@ -150,16 +150,29 @@
 
 **不**在本层执行 `subprocess` 调用 git；仅保证 API 顺序与锁字段传递正确。
 
+### 5.5 CLI：`mmem sync push` / `mmem memory merge`（与 Git 协作）
+
+**仓库内唯一记忆载荷**：将 **PNMS 数据目录**（`{pnms_data_root}/{user}/{agent}/` 或 `--pack-pnms`）打成 **tar.gz** 后，用 **`K_seed`** 做 **AES-256-GCM**，得到 **`pnms_bundle.enc`** 提交到 Git。**不再**生成仅占位的 `mmem_payload.enc`。
+
+**推送前（占锁之前）**：
+
+1. `git fetch origin`，比较本地 `HEAD` 与 `origin/<schema>`（`schema` 即 memory_schema_version 分支名，如 `v1`）。
+2. 若关系为 **behind**（远端较新）或 **diverged**（分叉）：**不调用** `begin-submit`，退出并提示用户先执行 **`mmem memory merge`**；PNMS **语义合并**（权重/图/槽）在库内**尚未实现**，合并命令当前仅做 **`git pull --rebase origin <schema>`**，后续由 PNMS 提供真正的合并后再接入同一命令或子步骤。
+3. 若为 **no_remote_branch**（首次推送）、**up_to_date** 或 **ahead**（本地有新提交可推）：再 **`begin-submit`** → 写入 `pnms_bundle.enc` → `commit` / `push` → **`mark-completed`**。
+
+**`mmem memory merge`**：仅对齐 **Git 历史**；用户需在本地自行协调解密后的 `pnms_bundle.enc` 与 PNMS 目录，或等待 PNMS 合并 API。
+
 ---
 
 ## 6. 与上层插件的协作契约
 
 ### 6.1 典型 Push 流程（与 MMEM `mmem.md` 3.3 节一致）
 
-1. 调用本库 **`begin_submit`**（或等效 HTTP + 签名），拿到 `lock_uuid`；若 **409**，由插件策略等待/重试。
-2. 插件在本地：合并 PNMS 产出、加密、**git commit**、`git push <remote> <memory_schema_version>`（分支名由插件/schema 决定，**不在本库硬编码**）。
-3. 成功则调用 **`mark_completed`**（`submission_ok=True`, `commit_ids=[...]`）；失败则 `submission_ok=False` 并填 `error_message`。
-4. 可选：在步骤前后调用 PNMS `save_checkpoint`，避免进程崩溃丢失本地神经状态。
+1. **`git fetch`** 并判定与远端关系；若需合并则**不占锁**，先完成 **merge**（见 §5.5）。
+2. 调用本库 **`begin_submit`**（或等效 HTTP + 签名），拿到 `lock_uuid`；若 **409**，由插件策略等待/重试。
+3. 插件在本地：将 **PNMS 目录**加密为 **`pnms_bundle.enc`**、**git commit**、`git push <remote> <memory_schema_version>`（分支名由插件/schema 决定，**不在本库硬编码**）。
+4. 成功则调用 **`mark_completed`**（`submission_ok=True`, `commit_ids=[...]`）；失败则 `submission_ok=False` 并填 `error_message`。
+5. 可选：在步骤前后调用 PNMS `save_checkpoint`，避免进程崩溃丢失本地神经状态。
 
 ### 6.2 PNMS 与 Agent 隔离
 
@@ -260,8 +273,8 @@ CLI 不改变该语义，只做**终端侧的胶水**：
 | `mmem chat -m "..."` | 单次提问后退出，适合脚本与 CI 烟测。 |
 | `mmem chat --no-remote` | 仅本地 PNMS + LLM，不调用 MindMemory HTTP（调试 PNMS 与 prompt 拼接）。 |
 | `mmem sync status` | 调用 `GET /me`、`GET /agents`（需 Header），展示远端可见的 Agent 与锁无关的只读信息。 |
-| `mmem sync begin` / `mmem sync done` | 显式调用 begin-submit / mark-completed（供调试 sync，不强制做 git）。 |
-| `mmem sync push`（可选，后期） | 在 CLI 内封装「加密产物 + git worktree」的**参考实现**，与 openclaw-mmem 文档中的分支/ schema 约定对齐；若暂未实现，命令可占位并提示使用插件或手动 git。 |
+| `mmem sync push` | 仅提交 **`pnms_bundle.enc`**；推送前 `fetch` 并比较远端，若落后/分叉则中止（不占锁）并提示 `mmem memory merge`。 |
+| `mmem memory merge` | `git fetch` + `git pull --rebase`；PNMS 语义合并未实现时由用户自行处理解密与目录协调。 |
 
 **全局选项示例**：`--base-url`、`--user-uuid`、`--private-key-path`、`--agent`、`--pnms-root`。
 
@@ -357,8 +370,8 @@ flowchart LR
 
 - 库与 CLI 在实现 **`mmem sync push`** 时，应：  
   1. 从用户私钥文件重算 **`K_seed` / `encrypted_password` 与 `gen_register_bundle.py` 一致**（单元测试字节级对比）；  
-  2. 使用 **`K_seed` 的 32 字节** 作为 **AES-256-GCM** 密钥，对记忆载荷加密/解密（**所有 Agent 相同**）；  
-  3. 对 PNMS/序列化产物加密后写入对应 Agent 的 Git 工作树，再 **`begin-submit` → push → `mark-completed`**。  
+  2. 使用 **`K_seed` 的 32 字节** 作为 **AES-256-GCM** 密钥，对 **PNMS 目录 tar.gz** 加密为 **`pnms_bundle.enc`**（**所有 Agent 相同**密钥材料）；  
+  3. 推送前 **`git fetch`** 并比较与 `origin/<schema>`：若 **behind/diverged** 则**不调用** `begin-submit`，提示 **`mmem memory merge`**；否则 **`begin-submit` → 写入 pnms_bundle.enc → push → `mark-completed`**。  
 - 可选：用 `encrypted_password` 与远端 `users` 表比对，校验账号与本地私钥匹配（绑定校验）。
 
 ---

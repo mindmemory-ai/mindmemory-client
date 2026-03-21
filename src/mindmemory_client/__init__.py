@@ -10,7 +10,7 @@ from mindmemory_client.memory_crypto import (
     encrypt_memory_base64,
     encrypt_memory_payload,
 )
-from mindmemory_client.pnms_bridge import PnmsMemoryBridge
+from mindmemory_client.pnms_bridge import PnmsMemoryBridge, resolve_pnms_data_dir
 from mindmemory_client.register_crypto import (
     encrypted_password_hex_from_private_key_openssh,
     key_fingerprint_from_public_key_ssh,
@@ -23,6 +23,7 @@ __all__ = [
     "MindMemoryAPIError",
     "MmemApiClient",
     "PnmsMemoryBridge",
+    "resolve_pnms_data_dir",
     "ChatMemorySession",
     "read_openssh_private_key_pem",
     "key_fingerprint_from_public_key_ssh",
