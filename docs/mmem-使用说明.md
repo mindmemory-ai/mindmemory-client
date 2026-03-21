@@ -67,6 +67,8 @@ mmem --help
 | `MMEM_LOG_LEVEL` | `mmem` 客户端日志级别：`DEBUG` / `INFO` / `WARNING` / `ERROR` | `INFO` |
 | `MMEM_LOG_FILE` | 可选，日志文件路径（额外写入；未设置则仅 stderr） | 未设置 |
 | `MMEM_LOG_FORMAT` | 可选，`logging` 格式串（覆盖默认时间+级别+logger+消息） | 内置默认 |
+| `MMEM_GIT_SSH_HOST` | Gogs SSH 主机名（`mmem agent init` clone 用） | 未设置 |
+| `MMEM_GIT_SSH_PORT` | SSH 端口（非 22 时） | 未设置 |
 
 ### 3.2 `.env` 文件
 
@@ -115,6 +117,9 @@ mmem
 ├── doctor              # 环境检查
 ├── models              # 列出 LLM profile
 ├── chat                # 对话 + PNMS
+├── agent               # Agent 工作区：PNMS + 记忆 Git 仓库（clone）
+│   ├── init            # 服务端注册 Agent/仓、本地目录、git clone
+│   └── info            # 工作区 / pnms / repo 路径
 ├── pnms                # 查看已保存的概念模块与记忆图（checkpoint）
 │   ├── status          # 目录 / meta / 边数摘要
 │   ├── concepts        # meta.json 与各 .pt
@@ -137,6 +142,7 @@ mmem account --help
 mmem sync --help
 mmem memory --help
 mmem pnms --help
+mmem agent --help
 ```
 
 ---
@@ -168,7 +174,19 @@ mmem pnms --help
 
 ---
 
-## 8. `mmem chat`
+## 8. `mmem agent`（工作区与记忆仓库）
+
+远端 **Gogs 仓库** 在 MindMemory **首次 `begin-submit`** 时由服务端创建（见服务端 `sync` 路由）。CLI 侧推荐顺序：
+
+1. 配置 **`MMEM_GIT_SSH_HOST`**（及可选 **`MMEM_GIT_SSH_PORT`**），与 Gogs SSH 一致。
+2. **`mmem agent init <名称>`**：向服务端请求注册（`begin-submit` + 失败型 `mark_completed` 释放锁）、在 `accounts/<user_uuid>/agents/<名称>/` 写入 `agent.json`、创建 **`pnms/`** 与将记忆仓库 **`git clone`** 到 **`repo/`**（使用账户私钥 `GIT_SSH_COMMAND`）。
+3. **`mmem chat --agent <名称>`**、**`mmem sync push --agent <名称>`** 会自动使用该工作区下的 **`pnms/`** 与 **`repo/`**（无需再手写 `--git-dir`，仍可显式覆盖）。
+
+OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 API（与 `agent_name` 一致）。
+
+---
+
+## 9. `mmem chat`
 
 与本地 **Ollama**（默认）或 `mock` / `echo` 对话，每轮通过 **PNMS** 更新记忆并 `save_checkpoint`。Ollama 侧优先调用 **`POST /api/chat`**；若返回 **404**（例如版本过旧无 Chat API），会自动回退 **`POST /api/generate`**。若 **两个接口都返回 404**，多为 **模型名与 `ollama list` 不一致** 或 **`MMEM_OLLAMA_URL` 未指向正在运行的 Ollama**（Ollama 0.18+ 均提供上述 API）。请保证已 **`ollama pull`** 且模型名与 profile 完全一致。
 
@@ -184,7 +202,7 @@ mmem pnms --help
 
 解析结果无 `user_uuid` 时，本地 PNMS 使用占位用户 `local-dev-user`。
 
-### 8.1 `mmem pnms`（概念图与记忆图）
+### 9.1 `mmem pnms`（概念图与记忆图）
 
 查看当前 **user + agent** 对应 checkpoint 目录下**已落盘**的内容：**概念模块**（`meta.json`、各 `*.pt`）与**记忆图**（SQLite `graph.db`）。子命令：`status`（摘要）、`concepts`（meta 与文件列表）、`graph`（按边权列出前 N 条边，`--limit`）。共用 `--agent`、`--user`（覆盖 `user_uuid`）、`--json`。
 
@@ -192,9 +210,9 @@ mmem pnms --help
 
 ---
 
-## 9. `mmem sync`
+## 10. `mmem sync`
 
-### 9.1 `mmem sync encrypt-file` / `decrypt-file`
+### 10.1 `mmem sync encrypt-file` / `decrypt-file`
 
 对任意文件使用 **`K_seed`** 做 AES-256-GCM（格式：`nonce(12)‖密文‖tag`，再 Base64 单行）。
 
@@ -202,36 +220,36 @@ mmem pnms --help
 - `encrypt-file`：`-o` 输出文件；否则打印到 stdout。  
 - `decrypt-file`：`-o` 输出明文文件；否则二进制写到 stdout。
 
-### 9.2 `mmem sync push`
+### 10.2 `mmem sync push`
 
 将 **PNMS 数据目录**（`tar.gz` 后）用 **`K_seed`** 加密，得到 **`pnms_bundle.enc`** 提交到 Git 并调用 MindMemory 同步接口。
 
 **必须**：已解析的 **`private_key_path`**（`env` 模式或 `account` 模式下的 `id_ed25519`）。  
-**有 `--git-dir` 时还需**：**`user_uuid`**；默认会校验 **`origin` URL** 是否包含 Gogs 用户名片段（`user_uuid` 去横线）；可用 **`--skip-remote-check`** 跳过。
+**需要完整同步时还需**：**`user_uuid`**；默认会校验 **`origin` URL** 是否包含 Gogs 用户名片段（`user_uuid` 去横线）；可用 **`--skip-remote-check`** 跳过。
 
 | 选项 | 说明 |
 |------|------|
 | `--agent` | Agent 名（必填） |
 | `--schema` | 与 `memory_schema_version` 一致，即 `git push` 的目标分支名（默认 `v1`） |
-| `--git-dir` | 已 `git init` 且配置 **`origin`** 的本地仓库；省略则只在当前目录写 **`pnms_bundle.enc`**，**不调用** `begin-submit` |
-| `--pack-pnms` | 指定 PNMS 目录；不指定时使用解析到的 `user_uuid` 与 `MMEM_PNMS_DATA_ROOT/<user_uuid>/<agent>/` |
+| `--git-dir` | 已配置 **`origin`** 的本地记忆仓库；省略时若已 **`mmem agent init`** 则使用 `.../agents/<agent>/repo/` |
+| `--pack-pnms` | 指定 PNMS 目录；不指定时使用 **`mmem agent init`** 后的 `.../agents/<agent>/pnms/` 或 `MMEM_PNMS_DATA_ROOT/<user>/<agent>/` |
 | `--skip-remote-check` | 不校验 `origin` URL |
 
-**流程（有 `--git-dir`）**：
+**流程（已解析到记忆仓库目录）**：
 
 1. `git fetch origin`  
 2. 比较本地 `HEAD` 与 `origin/<schema>`：若为 **behind** 或 **diverged**，**不占用同步锁**，退出码 **2**，并提示先执行 **`mmem memory merge`**  
 3. 否则：`begin-submit` → 写入 `pnms_bundle.enc` → `git add/commit/push origin HEAD:refs/heads/<schema>` → `mark-completed`
 
-**无 `--git-dir`**：仅生成 `pnms_bundle.enc`，不占锁。
+**无记忆仓库路径**（未 `--git-dir` 且未 `agent init`）：仅生成当前目录 `pnms_bundle.enc`，不占锁。
 
-### 9.3 `mmem sync ping`
+### 10.3 `mmem sync ping`
 
 需已解析的 **`user_uuid`**，调用 **`GET /api/v1/me`** 与 **`GET /api/v1/agents`**（Header `X-User-UUID`），用于验证账号与 Agent 列表。
 
 ---
 
-## 10. `mmem memory merge`
+## 11. `mmem memory merge`
 
 在**已配置 `origin`** 的仓库中执行：
 
@@ -243,7 +261,7 @@ mmem pnms --help
 
 ---
 
-## 11. Python 库（简要）
+## 12. Python 库（简要）
 
 ```python
 from mindmemory_client import (
@@ -264,7 +282,7 @@ with MmemApiClient(cfg) as api:
 
 ---
 
-## 12. 相关文档
+## 13. 相关文档
 
 | 文档 | 内容 |
 |------|------|

@@ -54,11 +54,16 @@ class PnmsMemoryBridge:
         user_uuid: str,
         agent_name: str,
         pnms_config: PNMSConfig | None = None,
+        *,
+        checkpoint_dir: Path | None = None,
     ) -> None:
         self.user_uuid = user_uuid
         self.agent_name = agent_name
         self.user_id = f"{user_uuid}::{agent_name}"
-        root = resolve_pnms_data_dir(Path(pnms_data_root), user_uuid, agent_name)
+        if checkpoint_dir is not None:
+            root = Path(checkpoint_dir)
+        else:
+            root = resolve_pnms_data_dir(Path(pnms_data_root), user_uuid, agent_name)
         root.mkdir(parents=True, exist_ok=True)
         base = pnms_config or PNMSConfig()
         cfg = PNMSConfig.from_dict(base.to_dict())

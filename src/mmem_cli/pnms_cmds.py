@@ -8,10 +8,10 @@ from typing import Optional
 
 import typer
 
+from mindmemory_client.agent_workspace import resolve_pnms_dir_for_user_agent
 from mindmemory_client.client_state import resolve_mmem_config
 from mindmemory_client.config import MindMemoryClientConfig
 from mindmemory_client.pnms_inspect import (
-    concept_checkpoint_root,
     load_concept_meta,
     summarize_checkpoint_dir,
     top_graph_edges,
@@ -28,7 +28,7 @@ def _resolve_root(
 ) -> tuple[str, Path, MindMemoryClientConfig]:
     cfg = resolve_mmem_config(base_url_override=base_url, agent_name_override=agent)
     uid = user_uuid or cfg.user_uuid or "local-dev-user"
-    root = concept_checkpoint_root(cfg.pnms_data_root, uid, agent)
+    root = resolve_pnms_dir_for_user_agent(cfg, uid, agent)
     return uid, root, cfg
 
 

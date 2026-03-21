@@ -20,6 +20,7 @@ from mindmemory_client.llm_profiles import default_config_path, load_llm_profile
 from mindmemory_client.ollama_llm import build_ollama_llm, ollama_health
 
 from mmem_cli.account import account_app
+from mmem_cli.agent_app import agent_app
 from mmem_cli.pnms_cmds import pnms_app
 
 logger = logging.getLogger(__name__)
@@ -186,7 +187,10 @@ def chat(
     cfg = cfg.model_copy(update={"agent_name": agent})
 
     uid = cfg.user_uuid or "local-dev-user"
-    bridge = PnmsMemoryBridge(cfg.pnms_data_root, uid, agent)
+    from mindmemory_client.agent_workspace import resolve_pnms_dir_for_user_agent
+
+    pnms_ckpt = resolve_pnms_dir_for_user_agent(cfg, uid, agent)
+    bridge = PnmsMemoryBridge(cfg.pnms_data_root, uid, agent, checkpoint_dir=pnms_ckpt)
     session = ChatMemorySession(bridge)
     llm_fn = _build_llm_callback(llm_mode, profile, ollama_url, model, config_path)
     logger.info("mmem chat agent=%s llm_mode=%s user=%s", agent, llm_mode, uid)
@@ -305,7 +309,7 @@ def _git_compare_with_remote(git_dir: Path, schema: str) -> str:
 def _resolve_pnms_dir_for_push(
     cfg: MindMemoryClientConfig, agent: str, pack_pnms: Optional[Path]
 ) -> Path:
-    from mindmemory_client.pnms_bridge import resolve_pnms_data_dir
+    from mindmemory_client.agent_workspace import resolve_pnms_dir_for_user_agent
 
     if pack_pnms is not None:
         return pack_pnms
@@ -317,7 +321,7 @@ def _resolve_pnms_dir_for_push(
             err=True,
         )
         raise typer.Exit(1)
-    return resolve_pnms_data_dir(cfg.pnms_data_root, cfg.user_uuid, agent)
+    return resolve_pnms_dir_for_user_agent(cfg, cfg.user_uuid, agent)
 
 
 def _pack_pnms_dir_to_encrypted_b64(pnms_dir: Path, key: bytes) -> str:
@@ -395,7 +399,7 @@ def sync_push(
     git_dir: Optional[Path] = typer.Option(
         None,
         "--git-dir",
-        help="已 init 且配置 remote 的仓库；省略则只写入当前目录 pnms_bundle.enc，不调用 MMEM sync API",
+        help="已 init 且配置 origin 的记忆仓库；省略时若已 mmem agent init 则使用该 Agent 的 repo/",
     ),
     base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
     skip_remote_check: bool = typer.Option(
@@ -415,10 +419,11 @@ def sync_push(
     """
     仅推送 **PNMS 目录** 经 tar.gz + AES-GCM（K_seed）后的 ``pnms_bundle.enc``，不再生成占位 ``mmem_payload.enc``。
 
-    有 ``--git-dir``：先 ``git fetch`` 并比较与 ``origin/<schema>``；若远端更新或分叉则**不占用同步锁**并退出，
-    需先执行 ``mmem memory merge`` 完成 Git 对齐与（未来）PNMS 合并后再推送。
+    若解析到记忆仓库路径（``--git-dir`` 或 ``mmem agent init`` 后的 ``.../agents/<agent>/repo``）：
+    先 ``git fetch`` 并比较与 ``origin/<schema>``；若远端更新或分叉则**不占用同步锁**并退出，
+    需先执行 ``mmem memory merge`` 完成 Git 对齐后再推送。
 
-    无 ``--git-dir``：仅生成本地 ``./pnms_bundle.enc``，不占锁。
+    若既无 ``--git-dir`` 也未初始化 Agent 工作区：仅生成本地 ``./pnms_bundle.enc``，不占锁。
     """
     from mindmemory_client.api import MmemApiClient
     from mindmemory_client.keys import read_openssh_private_key_pem
@@ -439,14 +444,28 @@ def sync_push(
     pnms_src.mkdir(parents=True, exist_ok=True)
     bundle_b64 = _pack_pnms_dir_to_encrypted_b64(pnms_src, key)
 
-    work = Path(git_dir) if git_dir else Path.cwd()
+    resolved_git: Optional[Path] = Path(git_dir) if git_dir else None
+    if resolved_git is None and cfg.user_uuid:
+        from mindmemory_client.agent_workspace import resolve_git_dir_for_sync
+
+        cand = resolve_git_dir_for_sync(cfg, agent)
+        if cand is not None and (cand / ".git").exists():
+            resolved_git = cand
+            typer.echo(f"使用 Agent 工作区记忆仓库: {resolved_git.resolve()}")
+
+    work = resolved_git if resolved_git is not None else Path.cwd()
     out_file = work / "pnms_bundle.enc"
 
-    if not git_dir:
+    if git_dir is None and resolved_git is None:
         out_file.write_text(bundle_b64 + "\n", encoding="utf-8")
         typer.echo(f"已写入 {out_file}（PNMS 来源: {pnms_src}）")
-        typer.echo("未使用 --git-dir：未调用 begin-submit。复制到仓库后执行 mmem sync push --git-dir … 完成上传。")
+        typer.echo(
+            "未配置记忆仓库：未调用 begin-submit。"
+            "可执行 mmem agent init <agent> 后重试，或手动指定 --git-dir。"
+        )
         return
+
+    git_repo = work.resolve()
 
     if not cfg.user_uuid:
         typer.echo(
@@ -458,7 +477,7 @@ def sync_push(
 
     if not skip_remote_check:
         try:
-            rurl = _git_remote_origin_url(git_dir)
+            rurl = _git_remote_origin_url(git_repo)
             _validate_remote_url_for_user(rurl, cfg.user_uuid)
             typer.echo(f"origin 校验通过: {rurl[:80]}{'…' if len(rurl) > 80 else ''}")
         except (subprocess.CalledProcessError, ValueError) as e:
@@ -466,18 +485,18 @@ def sync_push(
             raise typer.Exit(1)
 
     try:
-        _git_fetch_origin(git_dir)
+        _git_fetch_origin(git_repo)
     except subprocess.CalledProcessError as e:
         typer.echo(f"git fetch 失败: {e}", err=True)
         raise typer.Exit(1)
 
-    rel = _git_compare_with_remote(git_dir, schema)
+    rel = _git_compare_with_remote(git_repo, schema)
     typer.echo(f"与 origin/{schema} 比较: {rel}")
     if rel in ("behind", "diverged"):
         typer.echo(
             "远端已有较新或分叉提交，已中止推送（未占用同步锁）。\n"
             "请先在同一仓库执行：\n"
-            f"  mmem memory merge --git-dir {git_dir} --schema {schema}\n"
+            f"  mmem memory merge --git-dir {git_repo} --schema {schema}\n"
             "手动处理冲突并（未来由 PNMS 完成）合并本地 PNMS 数据后，再执行 mmem sync push。",
             err=True,
         )
@@ -502,14 +521,14 @@ def sync_push(
             ensure_ascii=False,
         )
         subprocess.run(
-            ["git", "-C", str(git_dir), "add", "pnms_bundle.enc"],
+            ["git", "-C", str(git_repo), "add", "pnms_bundle.enc"],
             check=True,
         )
         subprocess.run(
             [
                 "git",
                 "-C",
-                str(git_dir),
+                str(git_repo),
                 "commit",
                 "-m",
                 "mmem: sync PNMS bundle",
@@ -522,7 +541,7 @@ def sync_push(
             [
                 "git",
                 "-C",
-                str(git_dir),
+                str(git_repo),
                 "push",
                 "origin",
                 f"HEAD:refs/heads/{schema}",
@@ -530,7 +549,7 @@ def sync_push(
             check=True,
         )
         commit_id = subprocess.check_output(
-            ["git", "-C", str(git_dir), "rev-parse", "HEAD"],
+            ["git", "-C", str(git_repo), "rev-parse", "HEAD"],
             text=True,
         ).strip()
         with MmemApiClient(cfg) as api:
@@ -582,13 +601,14 @@ def sync_push(
 
 @memory_app.command("merge")
 def memory_merge(
-    git_dir: Path = typer.Option(
-        ...,
+    agent: str = typer.Option("cli-agent", "--agent", help="与 mmem agent init / chat 一致"),
+    git_dir: Optional[Path] = typer.Option(
+        None,
         "--git-dir",
         exists=True,
         file_okay=False,
         dir_okay=True,
-        help="已配置 origin 的本地 Git 仓库",
+        help="已配置 origin 的本地记忆仓库；省略时尝试 Agent 工作区 repo/",
     ),
     schema: str = typer.Option(
         "v1",
@@ -596,6 +616,7 @@ def memory_merge(
         help="与 mmem sync push 一致的分支名（memory_schema_version）",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="仅打印将执行的命令，不修改仓库"),
+    base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
 ) -> None:
     """
     拉取远端并尝试 ``git pull --rebase origin <schema>``，使本地与远端提交历史对齐。
@@ -603,6 +624,19 @@ def memory_merge(
     **PNMS 语义合并**（权重/图/槽等）尚未在库内实现：当前仅处理 Git 层。
     合并后请将远端 ``pnms_bundle.enc`` 解密并与本地 PNMS 目录协调（或等待 PNMS 提供合并 API）。
     """
+    from mindmemory_client.agent_workspace import resolve_git_dir_for_sync
+
+    cfg = resolve_mmem_config(base_url_override=base_url)
+    repo = git_dir
+    if repo is None and cfg.user_uuid:
+        cand = resolve_git_dir_for_sync(cfg, agent)
+        if cand is not None and (cand / ".git").exists():
+            repo = cand
+    if repo is None:
+        typer.echo("请指定 --git-dir，或先 mmem agent init 并 clone 记忆仓库。", err=True)
+        raise typer.Exit(1)
+    git_dir = repo
+
     if dry_run:
         typer.echo(f"将执行: git -C {git_dir} fetch origin")
         typer.echo(f"将执行: git -C {git_dir} pull --rebase origin {schema}")
@@ -657,6 +691,7 @@ def sync_ping(
 app.add_typer(sync_app, name="sync")
 app.add_typer(memory_app, name="memory")
 app.add_typer(account_app, name="account")
+app.add_typer(agent_app, name="agent")
 app.add_typer(pnms_app, name="pnms")
 
 
