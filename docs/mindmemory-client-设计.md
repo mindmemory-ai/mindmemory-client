@@ -133,7 +133,7 @@
 - 持有（或懒建）**全局 `PNMSConfig`** 与 **`PNMSClient`** 实例。
 - 为每个逻辑隔离单元（推荐：**同一 `user_uuid` 下的一个 `agent_name`**）分配：
   - **PNMS `user_id` 字符串**：建议 `f"{user_uuid}::{agent_name}"` 或仅 `agent_name` 在单用户进程内（需在文档中固定一种，避免跨用户冲突）。
-  - **持久化目录**：`{pnms_data_root}/{safe_segment(user_uuid)}/{safe_segment(agent_name)}/`，其下存放 PNMS 的 `concept_checkpoint_dir`、`graph.db` 等（见 PNMS `save_concept_modules`）。
+  - **持久化目录**：`{pnms_data_root}/{safe_segment(user_uuid)}/{safe_segment(agent_name)}/`，其下存放 PNMS `save_concept_modules` 写入的 `meta.json` / `*.pt`、`graph.db`、`memory_slots.json`、`memory_session.pt`（概念、图边、记忆槽与个人状态 S_t）。
 
 对外暴露高层方法（与 `pnms/docs/pnms_api.md` 对齐）：
 

@@ -188,7 +188,7 @@ mmem pnms --help
 
 查看当前 **user + agent** 对应 checkpoint 目录下**已落盘**的内容：**概念模块**（`meta.json`、各 `*.pt`）与**记忆图**（SQLite `graph.db`）。子命令：`status`（摘要）、`concepts`（meta 与文件列表）、`graph`（按边权列出前 N 条边，`--limit`）。共用 `--agent`、`--user`（覆盖 `user_uuid`）、`--json`。
 
-说明：PNMS 当前实现中**记忆槽**不写入该目录，仅保存在进程内；目录中的图与概念来自各轮对话结束时的 `save_checkpoint`。
+说明：每轮 `mmem chat` 结束时会 `save_checkpoint`，在 checkpoint 目录写入 **概念**（`meta.json` / `*.pt`）、**图**（`graph.db`）、**记忆槽**（`memory_slots.json`）与**个人状态**（`memory_session.pt`，含 S_t 与轮次）；下次启动会从同目录恢复。
 
 ---
 

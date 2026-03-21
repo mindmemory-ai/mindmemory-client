@@ -53,7 +53,7 @@ def pnms_status(
             "agent": agent,
             "pnms_data_root": str(cfg.pnms_data_root),
             **summary,
-            "note": "记忆槽（MemoryStore）当前未持久化到磁盘；仅概念模块与 graph.db 保存在 checkpoint 目录。",
+            "note": "PNMS 在 save_checkpoint 时会写入 memory_slots.json 与 memory_session.pt（含 S_t 与 round_counter）。",
         }
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         return
@@ -84,9 +84,21 @@ def pnms_status(
     else:
         typer.echo(f"graph.db: 边数={n_edge}")
 
+    n_mem = summary.get("memory_slots_saved_count")
+    if n_mem is not None:
+        typer.echo(f"memory_slots.json: 已保存槽数={n_mem}")
+    elif (root / "memory_slots.json").is_file():
+        typer.echo("memory_slots.json: 存在（条数解析失败）")
+    else:
+        typer.echo("memory_slots.json: 无（尚未经 save_checkpoint 写入记忆槽）")
+    if summary.get("memory_session_pt"):
+        typer.echo(f"memory_session.pt: 存在（个人状态 S_t 与轮次）")
+    else:
+        typer.echo("memory_session.pt: 无")
+
     typer.echo(
-        "说明: 记忆槽仅存在于会话内进程，未写入该目录；"
-        "`mmem chat` 结束轮次会 `save_checkpoint` 保存概念与图边。"
+        "说明: 每轮对话结束会 save_checkpoint，落盘概念、图、记忆槽与个人状态；"
+        "下次启动 mmem chat 会从同目录恢复。"
     )
 
 

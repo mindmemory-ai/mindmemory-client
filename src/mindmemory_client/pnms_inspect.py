@@ -58,11 +58,24 @@ def top_graph_edges(graph_db: Path, limit: int) -> list[tuple[str, str, float]]:
         return []
 
 
+def count_saved_memory_slots(memory_slots_json: Path) -> int | None:
+    """``memory_slots.json`` 中槽条数；文件不存在或格式异常时返回 None。"""
+    if not memory_slots_json.is_file():
+        return None
+    try:
+        raw = json.loads(memory_slots_json.read_text(encoding="utf-8"))
+        if isinstance(raw, list):
+            return len(raw)
+        if isinstance(raw, dict) and isinstance(raw.get("slots"), list):
+            return len(raw["slots"])
+    except (OSError, json.JSONDecodeError):
+        return None
+    return None
+
+
 def summarize_checkpoint_dir(root: Path) -> dict[str, Any]:
     """
-    汇总磁盘上已保存的概念模块与图（``save_concept_modules`` 写入的内容）。
-
-    说明：PNMS 当前实现中**记忆槽**不写入该目录，仅概念与图边持久化。
+    汇总磁盘上 ``save_concept_modules`` 写入的内容：概念、图边、记忆槽与会话状态。
     """
     out: dict[str, Any] = {
         "checkpoint_dir": str(root.resolve()),
@@ -72,6 +85,9 @@ def summarize_checkpoint_dir(root: Path) -> dict[str, Any]:
         "concept_pt_files": [],
         "graph_db": None,
         "graph_edge_count": None,
+        "memory_slots_json": None,
+        "memory_slots_saved_count": None,
+        "memory_session_pt": None,
     }
     if not root.is_dir():
         return out
@@ -94,5 +110,13 @@ def summarize_checkpoint_dir(root: Path) -> dict[str, Any]:
         out["graph_edge_count"] = count_graph_edges(gdb)
     else:
         out["graph_edge_count"] = None
+
+    ms = root / "memory_slots.json"
+    if ms.is_file():
+        out["memory_slots_json"] = str(ms.resolve())
+        out["memory_slots_saved_count"] = count_saved_memory_slots(ms)
+    mss = root / "memory_session.pt"
+    if mss.is_file():
+        out["memory_session_pt"] = str(mss.resolve())
 
     return out
