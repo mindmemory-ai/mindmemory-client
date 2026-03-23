@@ -1,7 +1,7 @@
 """MindMemory 客户端库：PNMS + MMEM HTTP API。"""
 
 from mindmemory_client.api import MmemApiClient
-from mindmemory_client.config import MindMemoryClientConfig
+from mindmemory_client.config import DEFAULT_AGENT_NAME, MindMemoryClientConfig
 from mindmemory_client.errors import MindMemoryAPIError
 from mindmemory_client.keys import read_openssh_private_key_pem
 from mindmemory_client.memory_crypto import (
@@ -25,6 +25,7 @@ from mindmemory_client.logging_config import configure_client_logging
 
 __all__ = [
     "MindMemoryClientConfig",
+    "DEFAULT_AGENT_NAME",
     "MindMemoryAPIError",
     "MmemApiClient",
     "PnmsMemoryBridge",

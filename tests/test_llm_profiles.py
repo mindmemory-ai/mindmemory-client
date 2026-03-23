@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from mindmemory_client.env_loader import reset_dotenv_loaded
-from mindmemory_client.llm_profiles import default_config_path, load_llm_profiles_from_toml
+from mindmemory_client.llm_profiles import (
+    LlmProfile,
+    default_config_path,
+    load_llm_profiles_from_toml,
+    upsert_llm_profile,
+    write_llm_profiles_to_toml,
+)
 
 
 def test_load_array_form(tmp_path: Path):
@@ -72,3 +78,39 @@ def test_default_config_path_uses_client_config_dir(
     monkeypatch.setenv("MMEM_CLIENT_CONFIG_DIR", str(root))
     reset_dotenv_loaded()
     assert default_config_path() == root / "config.toml"
+
+
+def test_write_and_reload_roundtrip(tmp_path: Path):
+    from mindmemory_client.llm_profiles import LlmProfilesConfig
+
+    p = tmp_path / "x.toml"
+    cfg = LlmProfilesConfig(
+        default_profile="a",
+        profiles={
+            "a": LlmProfile(target="remote", ollama_base_url="https://x", ollama_model="m", api_token="sec"),
+        },
+    )
+    write_llm_profiles_to_toml(p, cfg)
+    cfg2 = load_llm_profiles_from_toml(p)
+    assert cfg2.default_profile == "a"
+    assert cfg2.profiles["a"].target == "remote"
+    assert cfg2.profiles["a"].api_token == "sec"
+
+
+def test_upsert_merges(tmp_path: Path):
+    p = tmp_path / "c.toml"
+    upsert_llm_profile(
+        p,
+        "p1",
+        LlmProfile(ollama_model="m1"),
+        set_default=True,
+    )
+    upsert_llm_profile(
+        p,
+        "p2",
+        LlmProfile(ollama_model="m2"),
+        set_default=False,
+    )
+    cfg = load_llm_profiles_from_toml(p)
+    assert set(cfg.profiles.keys()) == {"p1", "p2"}
+    assert cfg.default_profile == "p1"

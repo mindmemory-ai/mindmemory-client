@@ -82,7 +82,10 @@ mmem --help
 
 ### 3.3 LLM 多模型配置（可选）
 
-复制 [config.example.toml](./config.example.toml) 为 `~/.mindmemory/config.toml`（或通过 `MMEM_CONFIG_PATH` 指定），使用 `[[llm.profiles]]` 或 `[llm.profiles.xxx]` 定义多组 `ollama_model` / `ollama_base_url`；CLI 用 `mmem chat -p <name>` 切换。
+- **写入配置**：`mmem models configure -p <profile> -t local|remote -M <模型名> [--url ...] [--api-token ...]`，写入 `~/.mindmemory/config.toml`（或 `MMEM_CONFIG_PATH`）。`local` 默认 URL 为本机 `11434`；`remote` 须 `--url`，鉴权用 `--api-token` 或 `--token-stdin`，或环境变量 **`MMEM_OLLAMA_API_TOKEN`**（运行时覆盖文件中的 token）。
+- **查看本机/当前 profile 可用模型**：`mmem models tags`（默认用当前解析的 profile；也可 `--url`）。
+- **列出 profile**：`mmem models` 或 `mmem models list`。
+- 亦可手动复制 [config.example.toml](./config.example.toml)，在 `[[llm.profiles]]` 中填写 `target`、`ollama_base_url`、`ollama_model`、可选 `api_token`；对话时用 `mmem chat -p <name>` 切换。
 
 ### 3.4 多账户时的目录约定
 
@@ -193,14 +196,14 @@ OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 AP
 | 选项 | 说明 |
 |------|------|
 | `-m` / `--message` | 单次提问后退出 |
-| `--agent` | Agent 名（PNMS 与 MMEM 隔离；默认 `cli-agent`） |
+| `--agent` | Agent 名（PNMS 与 MMEM 隔离；默认 `BT-7274`） |
 | `--llm` | `ollama`（默认）、`mock`、`echo` |
 | `-p` / `--profile` | LLM profile 名 |
 | `--ollama-url` / `--model` | 覆盖当前 profile |
 | `--no-remote` | 不请求 MindMemory `/health` |
 | `--config` | `config.toml` 路径 |
 
-解析结果无 `user_uuid` 时，本地 PNMS 使用占位用户 `local-dev-user`。
+**需先** `mmem account login`（或配置 `MMEM_CREDENTIAL_SOURCE=env` 与私钥）；未登录无法使用对话。PNMS 目录为 `accounts/<user_uuid>/agents/<agent>/pnms`。
 
 ### 9.1 `mmem pnms`（概念图与记忆图）
 

@@ -63,7 +63,9 @@ class PnmsMemoryBridge:
         if checkpoint_dir is not None:
             root = Path(checkpoint_dir)
         else:
-            root = resolve_pnms_data_dir(Path(pnms_data_root), user_uuid, agent_name)
+            from mindmemory_client.agent_workspace import agent_pnms_dir
+
+            root = agent_pnms_dir(user_uuid, agent_name)
         root.mkdir(parents=True, exist_ok=True)
         base = pnms_config or PNMSConfig()
         cfg = PNMSConfig.from_dict(base.to_dict())

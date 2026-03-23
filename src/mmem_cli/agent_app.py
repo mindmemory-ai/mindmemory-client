@@ -7,19 +7,148 @@ from typing import Optional
 
 import typer
 
+import json
+
 from mindmemory_client.agent_workspace import (
     agent_git_dir,
     agent_workspace_dir,
     ensure_agent_registered_on_server,
     git_clone_memory_repo,
+    list_local_agent_names,
+    list_local_agent_workspaces,
     load_agent_config,
     memory_repo_ssh_url,
     write_agent_config,
 )
-from mindmemory_client.client_state import resolve_mmem_config
+from mindmemory_client.client_state import load_state, resolve_mmem_config, save_state
+from mindmemory_client.config import DEFAULT_AGENT_NAME, MindMemoryClientConfig
+from mmem_cli.cli_auth import require_authenticated_user
 from mindmemory_client.env_loader import get_env
 
 agent_app = typer.Typer(no_args_is_help=True, help="Agent 工作区：PNMS 目录与记忆 Git 仓库")
+
+
+@agent_app.command("list")
+def agent_list(
+    remote: bool = typer.Option(False, "--remote", "-r", help="同时请求 MindMemory GET /api/v1/agents"),
+    json_out: bool = typer.Option(False, "--json", help="JSON 输出"),
+    base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
+) -> None:
+    """列出本机已初始化的 Agent；可选拉取服务端登记的全部 Agent。"""
+    cfg = resolve_mmem_config(base_url_override=base_url)
+    require_authenticated_user(cfg)
+    st = load_state()
+    current = cfg.agent_name
+    uid = cfg.user_uuid
+
+    local_rows: list[dict[str, str]] = []
+    if uid:
+        for n, ws in list_local_agent_workspaces(uid):
+            mark = "*" if n == current else " "
+            local_rows.append({"name": n, "workspace": str(ws.resolve()), "current": mark})
+
+    remote_payload: list[dict[str, object]] | None = None
+    if remote:
+        if not uid or not cfg.private_key_path:
+            typer.echo("需要已登录账户（mmem account login）或 env 凭证才能请求远端。", err=True)
+            raise typer.Exit(1)
+        try:
+            from mindmemory_client.api import MmemApiClient
+
+            with MmemApiClient(cfg) as api:
+                raw = api.list_agents(uid)
+            remote_payload = list(raw.get("agents") or [])
+        except Exception as e:
+            typer.echo(f"远端列表失败: {e}", err=True)
+            raise typer.Exit(1)
+
+    if json_out:
+        out: dict[str, object] = {
+            "current_agent_name": st.current_agent_name,
+            "resolved_default": current,
+            "local": local_rows,
+        }
+        if remote_payload is not None:
+            out["remote_agents"] = remote_payload
+        typer.echo(json.dumps(out, ensure_ascii=False, indent=2))
+        return
+
+    typer.echo(f"当前 CLI 默认 Agent: {current}")
+    if st.current_agent_name:
+        typer.echo("（来自 state.json 中 current_agent_name；可用 mmem agent unset 恢复默认名）")
+    else:
+        typer.echo("（未设置 current_agent_name，与内置默认 BT-7274 一致）")
+
+    typer.echo("")
+    typer.echo("本机工作区（* = 与当前默认同名）:")
+    if not local_rows:
+        typer.echo("  （无）可先执行: mmem agent init <名称>")
+    else:
+        for row in local_rows:
+            typer.echo(f"  {row['current']} {row['name']}")
+            typer.echo(f"      {row['workspace']}")
+
+    if remote_payload is not None:
+        typer.echo("")
+        typer.echo("服务端登记:")
+        if not remote_payload:
+            typer.echo("  （无）")
+        else:
+            for a in remote_payload:
+                nm = a.get("agent_name", "?")
+                mc = a.get("memory_count", "?")
+                rp = a.get("repo_path") or ""
+                typer.echo(f"  - {nm}  memories={mc}  repo={rp}")
+
+
+@agent_app.command("current")
+def agent_current(
+    base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
+) -> None:
+    """打印当前 CLI 将使用的默认 Agent 名（state + 解析结果）。"""
+    st = load_state()
+    cfg = resolve_mmem_config(base_url_override=base_url)
+    typer.echo(f"state.current_agent_name: {st.current_agent_name!r}")
+    typer.echo(f"解析后 agent_name: {cfg.agent_name!r}")
+    typer.echo(f"内置默认（无 state 时）: {MindMemoryClientConfig.from_env().agent_name!r}")
+
+
+@agent_app.command("use")
+def agent_use(
+    name: str = typer.Argument(..., help="设为默认 Agent 名称（mmem chat / pnms / sync 等省略 --agent 时）"),
+    base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
+) -> None:
+    """将默认 Agent 写入 state.json；需与本机或远端将使用的名称一致。"""
+    name = name.strip()
+    if not name:
+        typer.echo("名称不能为空。", err=True)
+        raise typer.Exit(1)
+
+    cfg = resolve_mmem_config(base_url_override=base_url)
+    require_authenticated_user(cfg)
+    uid = cfg.user_uuid
+    if uid:
+        local = set(list_local_agent_names(uid))
+        if name not in local:
+            typer.echo(
+                f"提示: 本机尚未发现工作区「{name}」。可执行 mmem agent init {name}，"
+                "若仅在远端存在仍可继续 use。",
+                err=True,
+            )
+
+    st = load_state()
+    st.current_agent_name = name
+    save_state(st)
+    typer.echo(f"已设置默认 Agent 为 {name!r}（写入 state.json）")
+
+
+@agent_app.command("unset")
+def agent_unset() -> None:
+    """清除 state 中的默认 Agent，恢复为内置默认名 BT-7274。"""
+    st = load_state()
+    st.current_agent_name = None
+    save_state(st)
+    typer.echo(f"已清除 current_agent_name，默认 Agent 恢复为 {DEFAULT_AGENT_NAME!r}。")
 
 
 def _ssh_host(host: Optional[str]) -> str:
@@ -67,9 +196,7 @@ def agent_init(
     立即 ``mark_completed(failure)`` 释放锁；再按约定 SSH URL ``git clone`` 到 ``repo/``。
     """
     cfg = resolve_mmem_config(base_url_override=base_url)
-    if not cfg.user_uuid or not cfg.private_key_path:
-        typer.echo("需要已登录账户（mmem account login）或 MMEM_CREDENTIAL_SOURCE=env + 私钥。", err=True)
-        raise typer.Exit(1)
+    require_authenticated_user(cfg)
 
     host = _ssh_host(ssh_host)
     port = _ssh_port(ssh_port)
@@ -88,6 +215,11 @@ def agent_init(
 
     write_agent_config(cfg.user_uuid, name, ssh_host=host, ssh_port=port, git_ssh_url=url)
     typer.echo(f"已写入 {agent_workspace_dir(cfg.user_uuid, name) / 'agent.json'}")
+
+    st = load_state()
+    st.current_agent_name = name
+    save_state(st)
+    typer.echo(f"已设为当前默认 Agent（mmem chat / sync 等可省略 --agent）：{name!r}")
 
     repo = agent_git_dir(cfg.user_uuid, name)
     if skip_clone:
@@ -120,10 +252,9 @@ def agent_info(
 ) -> None:
     """打印该 Agent 工作区路径、PNMS 目录、记忆仓库目录与已保存的 SSH URL。"""
     cfg = resolve_mmem_config(base_url_override=base_url)
+    require_authenticated_user(cfg)
     uid = cfg.user_uuid
-    if not uid:
-        typer.echo("需要已登录账户。", err=True)
-        raise typer.Exit(1)
+    assert uid is not None
     ws = agent_workspace_dir(uid, name)
     typer.echo(f"工作区: {ws.resolve()}")
     typer.echo(f"PNMS:   {(ws / 'pnms').resolve()}")

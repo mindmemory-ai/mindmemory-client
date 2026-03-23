@@ -16,11 +16,13 @@ import typer
 from mindmemory_client.client_state import resolve_mmem_config
 from mindmemory_client.config import MindMemoryClientConfig
 from mindmemory_client.errors import MindMemoryAPIError
-from mindmemory_client.llm_profiles import default_config_path, load_llm_profiles_from_toml, resolve_profile
+from mindmemory_client.llm_profiles import default_config_path, effective_ollama_url, load_llm_profiles_from_toml, resolve_profile
 from mindmemory_client.ollama_llm import build_ollama_llm, ollama_health
 
 from mmem_cli.account import account_app
 from mmem_cli.agent_app import agent_app
+from mmem_cli.cli_auth import require_authenticated_user
+from mmem_cli.models_app import models_app
 from mmem_cli.pnms_cmds import pnms_app
 
 logger = logging.getLogger(__name__)
@@ -94,7 +96,7 @@ def doctor(
     except Exception as e:
         typer.echo(f"MindMemory /health: 不可用（{e}）", err=True)
 
-    from mindmemory_client.client_paths import client_config_dir, default_pnms_data_root
+    from mindmemory_client.client_paths import client_config_dir, client_data_dir
     from mindmemory_client.client_state import load_state
     from mindmemory_client.credential_source import credential_source
 
@@ -106,12 +108,18 @@ def doctor(
         typer.echo(f"当前账户（state）: {st.current_account_uuid}")
     else:
         typer.echo("当前账户（state）: 未选择（account 模式可用 mmem account login）")
-    typer.echo(f"默认 PNMS 根（无 MMEM_PNMS_DATA_ROOT 时）: {default_pnms_data_root()}")
+    typer.echo(f"数据目录（pnms_data_root 默认与此一致）: {client_data_dir()}")
+    typer.echo(f"PNMS checkpoint 路径: accounts/<user_uuid>/agents/<agent>/pnms（与默认 Agent 一致）")
+    typer.echo(f"默认 Agent（mmem chat / sync 等省略 --agent 时）: {cfg.agent_name}")
+    if st.current_agent_name:
+        typer.echo(f"  （state.current_agent_name={st.current_agent_name!r}；可用 mmem agent list / use）")
+    else:
+        typer.echo("  （未设置 current_agent_name，与内置默认 BT-7274 一致；可用 mmem agent use）")
 
     if cfg.user_uuid:
         typer.echo(f"解析后 user_uuid: 已设置（长度 {len(cfg.user_uuid)}）")
     else:
-        typer.echo("解析后 user_uuid: 未设置（仅本地 PNMS 时可忽略）")
+        typer.echo("解析后 user_uuid: 未设置（对话与同步需先 mmem account login）")
     if cfg.private_key_path:
         typer.echo(f"解析后私钥: {cfg.private_key_path}")
     else:
@@ -120,7 +128,10 @@ def doctor(
     llm_cfg = load_llm_profiles_from_toml(config_path)
     prof = resolve_profile(llm_cfg, None)
     typer.echo(f"配置文件: {config_path or default_config_path()}（存在则已加载多模型）")
-    typer.echo(f"当前默认 LLM profile: {llm_cfg.default_profile} → {prof.ollama_model} @ {prof.ollama_base_url}")
+    typer.echo(
+        f"当前默认 LLM profile: {llm_cfg.default_profile} → {prof.ollama_model} @ {effective_ollama_url(prof)} "
+        f"(target={prof.target}, token={'已配置' if prof.api_token else '无'})"
+    )
 
     from mindmemory_client.env_loader import get_env
 
@@ -129,7 +140,10 @@ def doctor(
     _lf = get_env("MMEM_LOG_FILE")
     typer.echo(f"MMEM_LOG_FILE: {_lf or '（未设置，仅 stderr）'}")
     try:
-        tags = ollama_health(prof.ollama_base_url)
+        _oh: dict[str, str] = {}
+        if prof.api_token and str(prof.api_token).strip():
+            _oh["Authorization"] = f"Bearer {prof.api_token.strip()}"
+        tags = ollama_health(effective_ollama_url(prof), headers=_oh)
         models = tags.get("models") or []
         names = [m.get("name", "?") for m in models[:12]]
         extra = f" …共 {len(models)} 个" if len(models) > 12 else ""
@@ -138,25 +152,14 @@ def doctor(
         typer.echo(f"Ollama: 不可用（{e}）", err=True)
 
 
-@app.command("models")
-def list_models(
-    config_path: Optional[Path] = typer.Option(None, "--config", envvar="MMEM_CONFIG_PATH"),
-) -> None:
-    """列出 config.toml 中的 LLM profile 与当前解析结果。"""
-    path = config_path or default_config_path()
-    llm_cfg = load_llm_profiles_from_toml(config_path)
-    typer.echo(f"配置文件: {path} {'(存在)' if path.is_file() else '(不存在，使用内置 default)'}")
-    typer.echo(f"default_profile: {llm_cfg.default_profile}")
-    for name, p in sorted(llm_cfg.profiles.items()):
-        typer.echo(f"  [{name}] backend={p.backend} model={p.ollama_model} url={p.ollama_base_url}")
-    cur = resolve_profile(llm_cfg, None)
-    typer.echo(f"解析后（默认）: {cur.ollama_model} @ {cur.ollama_base_url}")
-
-
 @app.command()
 def chat(
     message: Optional[str] = typer.Option(None, "-m", "--message", help="单次提问后退出"),
-    agent: str = typer.Option("cli-agent", "--agent", help="Agent 名称（MMEM + PNMS 隔离）"),
+    agent: Optional[str] = typer.Option(
+        None,
+        "--agent",
+        help="Agent 名称；省略则使用 mmem agent use 所设或默认 BT-7274",
+    ),
     llm_mode: str = typer.Option(
         "ollama",
         "--llm",
@@ -183,10 +186,12 @@ def chat(
         typer.echo(f"导入失败: {e}（请先 pip install -e ../pnms）", err=True)
         raise typer.Exit(1)
 
-    cfg = resolve_mmem_config(base_url_override=base_url)
-    cfg = cfg.model_copy(update={"agent_name": agent})
+    cfg = resolve_mmem_config(base_url_override=base_url, agent_name_override=agent)
+    require_authenticated_user(cfg)
+    agent = cfg.agent_name
 
-    uid = cfg.user_uuid or "local-dev-user"
+    uid = cfg.user_uuid
+    assert uid is not None
     from mindmemory_client.agent_workspace import resolve_pnms_dir_for_user_agent
 
     pnms_ckpt = resolve_pnms_dir_for_user_agent(cfg, uid, agent)
@@ -197,7 +202,10 @@ def chat(
 
     if llm_mode == "ollama":
         p = resolve_profile(load_llm_profiles_from_toml(config_path), profile, ollama_url_override=ollama_url, ollama_model_override=model)
-        typer.echo(f"[LLM] profile={profile!r} model={p.ollama_model} @ {p.ollama_base_url}")
+        typer.echo(
+            f"[LLM] profile={profile!r} model={p.ollama_model} @ {effective_ollama_url(p)} "
+            f"(target={p.target}, auth={'yes' if p.api_token else 'no'})"
+        )
 
     if not no_remote and cfg.user_uuid:
         try:
@@ -315,9 +323,9 @@ def _resolve_pnms_dir_for_push(
         return pack_pnms
     if not cfg.user_uuid:
         typer.echo(
-            "请指定 --pack-pnms，或在 account 模式下 mmem account login；"
-            f"或 MMEM_CREDENTIAL_SOURCE=env 且设置 MMEM_USER_UUID 以使用默认目录 "
-            f"（{cfg.pnms_data_root}/<user>/<agent>/）",
+            "请指定 --pack-pnms，或先登录（mmem account login）"
+            " / 配置 MMEM_CREDENTIAL_SOURCE=env 与 MMEM_USER_UUID；"
+            "默认 PNMS 目录为 accounts/<user_uuid>/agents/<agent>/pnms。",
             err=True,
         )
         raise typer.Exit(1)
@@ -390,7 +398,11 @@ def sync_decrypt_file(
 
 @sync_app.command("push")
 def sync_push(
-    agent: str = typer.Option(..., "--agent", help="Agent 名称"),
+    agent: Optional[str] = typer.Option(
+        None,
+        "--agent",
+        help="Agent 名称；省略则使用 mmem agent use 所设或默认 BT-7274",
+    ),
     schema: str = typer.Option(
         "v1",
         "--schema",
@@ -413,7 +425,7 @@ def sync_push(
         exists=True,
         file_okay=False,
         dir_okay=True,
-        help="要打包的 PNMS 目录；默认使用解析到的 user_uuid 与 MMEM_PNMS_DATA_ROOT/<user>/<agent>/",
+        help="要打包的 PNMS 目录；默认使用 accounts/<user>/agents/<agent>/pnms",
     ),
 ) -> None:
     """
@@ -429,7 +441,9 @@ def sync_push(
     from mindmemory_client.keys import read_openssh_private_key_pem
     from mindmemory_client.register_crypto import k_seed_bytes_from_private_key_openssh
 
-    cfg = resolve_mmem_config(base_url_override=base_url)
+    cfg = resolve_mmem_config(base_url_override=base_url, agent_name_override=agent)
+    require_authenticated_user(cfg)
+    agent = cfg.agent_name
     if not cfg.private_key_path:
         typer.echo(
             "需要私钥：MMEM_CREDENTIAL_SOURCE=env 且设置 MMEM_PRIVATE_KEY_PATH，"
@@ -601,7 +615,11 @@ def sync_push(
 
 @memory_app.command("merge")
 def memory_merge(
-    agent: str = typer.Option("cli-agent", "--agent", help="与 mmem agent init / chat 一致"),
+    agent: Optional[str] = typer.Option(
+        None,
+        "--agent",
+        help="与 mmem agent use / chat 一致；省略则用 state 或默认 BT-7274",
+    ),
     git_dir: Optional[Path] = typer.Option(
         None,
         "--git-dir",
@@ -626,7 +644,9 @@ def memory_merge(
     """
     from mindmemory_client.agent_workspace import resolve_git_dir_for_sync
 
-    cfg = resolve_mmem_config(base_url_override=base_url)
+    cfg = resolve_mmem_config(base_url_override=base_url, agent_name_override=agent)
+    require_authenticated_user(cfg)
+    agent = cfg.agent_name
     repo = git_dir
     if repo is None and cfg.user_uuid:
         cand = resolve_git_dir_for_sync(cfg, agent)
@@ -692,6 +712,7 @@ app.add_typer(sync_app, name="sync")
 app.add_typer(memory_app, name="memory")
 app.add_typer(account_app, name="account")
 app.add_typer(agent_app, name="agent")
+app.add_typer(models_app, name="models")
 app.add_typer(pnms_app, name="pnms")
 
 

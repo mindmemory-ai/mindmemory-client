@@ -10,7 +10,7 @@ from mindmemory_client.client_state import (
     save_state,
     write_private_key_file,
 )
-from mindmemory_client.config import MindMemoryClientConfig
+from mindmemory_client.config import DEFAULT_AGENT_NAME
 
 
 @pytest.fixture
@@ -43,7 +43,25 @@ def test_resolve_uses_account_when_state_set(isolated_mmem_home, monkeypatch):
     assert r.user_uuid == uid
     assert r.private_key_path is not None
     assert uid in str(r.private_key_path)
-    assert r.pnms_data_root == isolated_mmem_home / "data" / "pnms"
+    assert r.pnms_data_root == isolated_mmem_home / "data"
+    assert r.agent_name == DEFAULT_AGENT_NAME
+
+
+def test_resolve_uses_current_agent_from_state(isolated_mmem_home, monkeypatch):
+    uid = "550e8400-e29b-41d4-a716-446655440000"
+    meta = AccountMeta(email="t@example.com", user_uuid=uid)
+    save_account_meta(meta)
+    write_private_key_file(uid, "dummy-not-valid-key")
+    st = load_state()
+    st.current_account_uuid = uid
+    st.current_agent_name = "my-bot"
+    save_state(st)
+
+    r = resolve_mmem_config()
+    assert r.agent_name == "my-bot"
+
+    r2 = resolve_mmem_config(agent_name_override="explicit")
+    assert r2.agent_name == "explicit"
 
 
 def test_resolve_env_overrides_account(isolated_mmem_home, monkeypatch):

@@ -10,6 +10,7 @@ import typer
 
 from mindmemory_client.agent_workspace import resolve_pnms_dir_for_user_agent
 from mindmemory_client.client_state import resolve_mmem_config
+from mmem_cli.cli_auth import require_authenticated_user
 from mindmemory_client.config import MindMemoryClientConfig
 from mindmemory_client.pnms_inspect import (
     load_concept_meta,
@@ -23,28 +24,36 @@ pnms_app = typer.Typer(no_args_is_help=True, help="PNMS 概念图与记忆图（
 def _resolve_root(
     *,
     base_url: Optional[str],
-    agent: str,
+    agent: Optional[str],
     user_uuid: Optional[str],
 ) -> tuple[str, Path, MindMemoryClientConfig]:
     cfg = resolve_mmem_config(base_url_override=base_url, agent_name_override=agent)
-    uid = user_uuid or cfg.user_uuid or "local-dev-user"
-    root = resolve_pnms_dir_for_user_agent(cfg, uid, agent)
+    require_authenticated_user(cfg)
+    an = cfg.agent_name
+    uid = user_uuid or cfg.user_uuid
+    if not uid:
+        typer.echo("无法解析 user_uuid。", err=True)
+        raise typer.Exit(1)
+    root = resolve_pnms_dir_for_user_agent(cfg, uid, an)
     return uid, root, cfg
 
 
 @pnms_app.command("status")
 def pnms_status(
-    agent: str = typer.Option("cli-agent", "--agent", help="与 mmem chat 一致的 Agent 名"),
+    agent: Optional[str] = typer.Option(
+        None, "--agent", help="与 mmem chat 一致；省略则 mmem agent use 或默认 BT-7274"
+    ),
     user_uuid: Optional[str] = typer.Option(
         None,
         "--user",
-        help="覆盖 user_uuid（默认：已登录账户或 local-dev-user）",
+        help="覆盖 user_uuid（需已登录；默认当前账户）",
     ),
     base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
     json_out: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
     """查看当前 user+agent 的 checkpoint 目录与已保存的概念/图统计。"""
     uid, root, cfg = _resolve_root(base_url=base_url, agent=agent, user_uuid=user_uuid)
+    agent = cfg.agent_name
     summary = summarize_checkpoint_dir(root)
 
     if json_out:
@@ -104,13 +113,14 @@ def pnms_status(
 
 @pnms_app.command("concepts")
 def pnms_concepts(
-    agent: str = typer.Option("cli-agent", "--agent"),
+    agent: Optional[str] = typer.Option(None, "--agent"),
     user_uuid: Optional[str] = typer.Option(None, "--user"),
     base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
     """列出已保存的概念模块（meta.json + 各 .pt 文件）。"""
-    uid, root, _cfg = _resolve_root(base_url=base_url, agent=agent, user_uuid=user_uuid)
+    uid, root, cfg = _resolve_root(base_url=base_url, agent=agent, user_uuid=user_uuid)
+    agent = cfg.agent_name
     meta = load_concept_meta(root)
 
     if json_out:
@@ -134,14 +144,15 @@ def pnms_concepts(
 
 @pnms_app.command("graph")
 def pnms_graph(
-    agent: str = typer.Option("cli-agent", "--agent"),
+    agent: Optional[str] = typer.Option(None, "--agent"),
     user_uuid: Optional[str] = typer.Option(None, "--user"),
     base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
     limit: int = typer.Option(30, "--limit", "-n", help="列出边权最高的前 N 条"),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
     """查看已保存的记忆图边（SQLite graph.db，按边权降序）。"""
-    _uid, root, _cfg = _resolve_root(base_url=base_url, agent=agent, user_uuid=user_uuid)
+    _uid, root, cfg = _resolve_root(base_url=base_url, agent=agent, user_uuid=user_uuid)
+    agent = cfg.agent_name
     gdb = root / "graph.db"
 
     edges = top_graph_edges(gdb, limit=max(0, limit))

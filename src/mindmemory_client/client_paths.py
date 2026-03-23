@@ -46,7 +46,7 @@ def account_meta_path(user_uuid: str) -> Path:
 
 def default_pnms_data_root() -> Path:
     """
-    未设置 ``MMEM_PNMS_DATA_ROOT`` 时，多账户场景下的 PNMS 根目录。
-    实际数据路径为 ``{root}/{user_uuid}/{agent}/``（与 ``resolve_pnms_data_dir`` 一致）。
+    兼容旧版：PNMS checkpoint 现统一为 ``accounts/<uuid>/agents/<agent>/pnms``。
+    保留 ``…/pnms`` 子目录仅作兼容或第三方脚本参考。
     """
     return client_data_dir() / "pnms"

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from mindmemory_client.client_paths import account_dir
-from mindmemory_client.config import MindMemoryClientConfig
+from mindmemory_client.config import DEFAULT_AGENT_NAME, MindMemoryClientConfig
 from mindmemory_client.env_loader import get_env
 
 
@@ -58,6 +58,42 @@ def agent_git_dir(user_uuid: str, agent_name: str) -> Path:
 
 def agent_config_path(user_uuid: str, agent_name: str) -> Path:
     return agent_workspace_dir(user_uuid, agent_name) / "agent.json"
+
+
+def list_local_agent_workspaces(user_uuid: str) -> list[tuple[str, Path]]:
+    """
+    列出本机已初始化迹象的 Agent：返回 ``(展示名, 工作区目录)``。
+    目录下存在 ``agent.json``、``pnms`` 或 ``repo`` 之一即视为已使用。
+    """
+    agents_root = account_dir(user_uuid) / "agents"
+    if not agents_root.is_dir():
+        return []
+    out: list[tuple[str, Path]] = []
+    for child in sorted(agents_root.iterdir()):
+        if not child.is_dir():
+            continue
+        seg = child.name
+        if (
+            (child / "agent.json").is_file()
+            or (child / "pnms").is_dir()
+            or (child / "repo").is_dir()
+        ):
+            meta = load_agent_config(user_uuid, seg)
+            display = str(meta.get("agent_name", seg)) if meta else seg
+            out.append((display, agent_workspace_dir(user_uuid, seg)))
+    out.sort(key=lambda t: t[0].lower())
+    return out
+
+
+def list_local_agent_names(user_uuid: str) -> list[str]:
+    """``list_local_agent_workspaces`` 的展示名列表（去重保序）。"""
+    seen: set[str] = set()
+    names: list[str] = []
+    for d, _ in list_local_agent_workspaces(user_uuid):
+        if d not in seen:
+            seen.add(d)
+            names.append(d)
+    return names
 
 
 def load_agent_config(user_uuid: str, agent_name: str) -> dict[str, Any] | None:
@@ -131,18 +167,14 @@ def git_clone_memory_repo(
         raise RuntimeError(f"git clone 失败: {r.stderr or r.stdout or r.returncode}")
 
 
-def resolve_pnms_dir_for_user_agent(cfg: MindMemoryClientConfig, user_uuid: str, agent_name: str) -> Path:
+def resolve_pnms_dir_for_user_agent(_cfg: MindMemoryClientConfig, user_uuid: str, agent_name: str) -> Path:
     """
-    若已为该 Agent 初始化工作区（存在 ``agent.json`` 或 ``.../pnms`` 目录），
-    则 PNMS 使用 ``accounts/.../agents/.../pnms``；否则沿用 ``MMEM_PNMS_DATA_ROOT/<user>/<agent>/``。
+    PNMS checkpoint 固定位于 ``accounts/<uuid>/agents/<agent>/pnms``（与其它 Agent 一致）。
+    首参数保留用于签名兼容；不再写入 ``~/.mindmemory/pnms/<user>/<agent>/``。
     """
-    ws = agent_workspace_dir(user_uuid, agent_name)
     pnms = agent_pnms_dir(user_uuid, agent_name)
-    if agent_config_path(user_uuid, agent_name).is_file() or pnms.is_dir():
-        return pnms
-    from mindmemory_client.pnms_bridge import resolve_pnms_data_dir
-
-    return resolve_pnms_data_dir(Path(cfg.pnms_data_root), user_uuid, agent_name)
+    pnms.mkdir(parents=True, exist_ok=True)
+    return pnms
 
 
 def resolve_git_dir_for_sync(cfg: MindMemoryClientConfig, agent_name: str) -> Path | None:
@@ -182,3 +214,70 @@ def ensure_agent_registered_on_server(cfg: MindMemoryClientConfig, agent_name: s
             error_message="mmem agent init：仅注册 Agent/仓库，无 Git 提交",
         )
         return begin
+
+
+def ensure_default_agent_workspace(cfg: MindMemoryClientConfig) -> dict[str, Any]:
+    """
+    登录或注册成功后为默认 Agent（``DEFAULT_AGENT_NAME``）创建工作区，与 ``mmem agent init`` 目录结构一致。
+    需已配置 ``user_uuid`` 与 ``private_key_path``。
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+    out: dict[str, Any] = {"ok": False}
+    if not cfg.user_uuid or not cfg.private_key_path:
+        out["reason"] = "no_credentials"
+        return out
+    uid = cfg.user_uuid
+    name = DEFAULT_AGENT_NAME
+    if agent_config_path(uid, name).is_file():
+        agent_pnms_dir(uid, name).mkdir(parents=True, exist_ok=True)
+        out["ok"] = True
+        out["skipped"] = "already_initialized"
+        return out
+
+    host = (get_env("MMEM_GIT_SSH_HOST") or "").strip()
+    port_raw = (get_env("MMEM_GIT_SSH_PORT") or "").strip()
+    port: int | None = None
+    if port_raw:
+        try:
+            port = int(port_raw)
+        except ValueError:
+            port = None
+
+    if not host:
+        host = "localhost"
+        out["warning"] = (
+            "MMEM_GIT_SSH_HOST 未设置，已用 localhost 占位；请配置后执行 "
+            f"mmem agent init {name} 或编辑 agent.json 以同步记忆仓库。"
+        )
+
+    url = memory_repo_ssh_url(uid, name, ssh_host=host)
+
+    try:
+        ensure_agent_registered_on_server(cfg, name)
+    except Exception as e:
+        out["register_error"] = str(e)
+        logger.warning("默认 Agent 服务端注册失败: %s", e)
+
+    try:
+        write_agent_config(uid, name, ssh_host=host, ssh_port=port, git_ssh_url=url)
+    except Exception as e:
+        out["error"] = str(e)
+        return out
+
+    repo = agent_git_dir(uid, name)
+    if host and host != "localhost" and not (repo / ".git").exists():
+        try:
+            git_clone_memory_repo(
+                remote_url=url,
+                dest=repo,
+                private_key_path=Path(cfg.private_key_path),
+                ssh_port=port,
+            )
+        except Exception as e:
+            out["clone_error"] = str(e)
+            logger.warning("默认 Agent git clone 失败: %s", e)
+
+    out["ok"] = True
+    return out

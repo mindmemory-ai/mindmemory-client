@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from typing import Any, Callable
 
 import httpx
 
-from mindmemory_client.llm_profiles import LlmProfile
+from mindmemory_client.llm_profiles import LlmProfile, effective_ollama_url
 
 logger = logging.getLogger(__name__)
+
+
+def _ollama_headers(profile: LlmProfile) -> dict[str, str]:
+    h: dict[str, str] = {}
+    if profile.api_token and profile.api_token.strip():
+        h["Authorization"] = f"Bearer {profile.api_token.strip()}"
+    return h
 
 
 def _ollama_error_detail(resp: httpx.Response) -> str:
@@ -24,8 +31,9 @@ def _ollama_error_detail(resp: httpx.Response) -> str:
 
 
 def build_ollama_llm(profile: LlmProfile) -> Callable[[str, str], str]:
-    base = profile.ollama_base_url.rstrip("/")
-    client = httpx.Client(timeout=profile.timeout_s)
+    base = effective_ollama_url(profile).rstrip("/")
+    headers = _ollama_headers(profile)
+    client = httpx.Client(timeout=profile.timeout_s, headers=headers)
 
     def llm(query: str, context: str) -> str:
         # PNMS 传入的 context 已含系统与记忆；再拼用户问题
@@ -33,13 +41,14 @@ def build_ollama_llm(profile: LlmProfile) -> Callable[[str, str], str]:
             f"以下是与记忆相关的上下文：\n{context}\n\n请根据上下文回答。\n用户问题：{query}"
         )
         logger.debug(
-            "Ollama request model=%s base=%s query_chars=%d context_chars=%d",
+            "Ollama request model=%s base=%s query_chars=%d context_chars=%d auth=%s",
             profile.ollama_model,
             base,
             len(query),
             len(context),
+            bool(headers),
         )
-        body_chat = {
+        body_chat: dict[str, Any] = {
             "model": profile.ollama_model,
             "messages": [{"role": "user", "content": user_content}],
             "stream": False,
@@ -57,7 +66,7 @@ def build_ollama_llm(profile: LlmProfile) -> Callable[[str, str], str]:
             r.raise_for_status()
 
         # /api/chat 返回 404：多为旧版无 Chat API；也可能是模型不存在（/api/generate 会同样失败）
-        body_gen = {
+        body_gen: dict[str, Any] = {
             "model": profile.ollama_model,
             "prompt": user_content,
             "stream": False,
@@ -76,16 +85,16 @@ def build_ollama_llm(profile: LlmProfile) -> Callable[[str, str], str]:
             f"/api/generate → HTTP {r2.status_code}: {_ollama_error_detail(r2)}。"
             "常见原因：① 未拉取模型，请执行 `ollama pull <模型名>` 后重试；"
             "② 模型名与 `ollama list` 中完全一致（含 tag，如 `llama3.2:latest`）；"
-            "③ 确认 `MMEM_OLLAMA_URL` / `config.toml` 指向正在监听的 Ollama（默认 http://127.0.0.1:11434），"
-            "且本机无其它进程占用该端口。"
+            "③ 确认 URL / `config.toml` 指向正在监听的 Ollama，"
+            "且本机无其它进程占用该端口；远程需检查 api_token。"
         )
 
     return llm
 
 
-def ollama_health(base_url: str, timeout: float = 5.0) -> dict:
-    """GET /api/tags，用于 doctor。"""
+def ollama_health(base_url: str, timeout: float = 5.0, *, headers: dict[str, str] | None = None) -> dict:
+    """GET /api/tags，用于 doctor / mmem models tags。"""
     base = base_url.rstrip("/")
-    r = httpx.get(f"{base}/api/tags", timeout=timeout)
+    r = httpx.get(f"{base}/api/tags", timeout=timeout, headers=headers or {})
     r.raise_for_status()
     return r.json()

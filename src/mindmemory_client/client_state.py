@@ -14,7 +14,6 @@ from mindmemory_client.client_paths import (
     accounts_config_dir,
     client_config_dir,
     client_data_dir,
-    default_pnms_data_root,
     state_path,
 )
 from mindmemory_client.config import MindMemoryClientConfig
@@ -26,6 +25,7 @@ from mindmemory_client.env_loader import get_env
 class ClientState:
     version: int = 1
     current_account_uuid: str | None = None
+    current_agent_name: str | None = None  # mmem agent use；未设置则与默认 BT-7274 一致
 
 
 @dataclass
@@ -46,6 +46,7 @@ def load_state() -> ClientState:
     return ClientState(
         version=int(raw.get("version", 1)),
         current_account_uuid=raw.get("current_account_uuid"),
+        current_agent_name=raw.get("current_agent_name"),
     )
 
 
@@ -55,6 +56,7 @@ def save_state(state: ClientState) -> None:
     data = {
         "version": state.version,
         "current_account_uuid": state.current_account_uuid,
+        "current_agent_name": state.current_agent_name,
     }
     p.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -154,6 +156,10 @@ def resolve_mmem_config(
         base = base.model_copy(update={"base_url": base_url_override})
     if agent_name_override:
         base = base.model_copy(update={"agent_name": agent_name_override})
+    else:
+        st_agent = load_state()
+        if st_agent.current_agent_name:
+            base = base.model_copy(update={"agent_name": st_agent.current_agent_name})
 
     src = credential_source()
     if src in ("env", "none"):
@@ -169,7 +175,7 @@ def resolve_mmem_config(
     if not meta or not pk.is_file():
         return base
 
-    pnms_root = Path(get_env("MMEM_PNMS_DATA_ROOT") or default_pnms_data_root())
+    pnms_root = Path(get_env("MMEM_PNMS_DATA_ROOT") or str(client_data_dir()))
     return base.model_copy(
         update={
             "user_uuid": meta.user_uuid,
@@ -184,4 +190,3 @@ def ensure_client_dirs() -> None:
     client_config_dir().mkdir(parents=True, exist_ok=True)
     client_data_dir().mkdir(parents=True, exist_ok=True)
     accounts_config_dir().mkdir(parents=True, exist_ok=True)
-    default_pnms_data_root().mkdir(parents=True, exist_ok=True)

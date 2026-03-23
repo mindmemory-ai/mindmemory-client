@@ -9,11 +9,11 @@ import typer
 
 from mindmemory_client.api import MmemApiClient
 from mindmemory_client.auth_http import post_login, post_register, post_setup_key
+from mindmemory_client.agent_workspace import agent_workspace_dir, ensure_default_agent_workspace
 from mindmemory_client.client_paths import (
     account_private_key_path,
     client_config_dir,
     client_data_dir,
-    default_pnms_data_root,
 )
 from mindmemory_client.client_state import (
     AccountMeta,
@@ -28,7 +28,7 @@ from mindmemory_client.client_state import (
     write_private_key_file,
 )
 from mindmemory_client.credential_source import credential_source
-from mindmemory_client.config import MindMemoryClientConfig
+from mindmemory_client.config import DEFAULT_AGENT_NAME, MindMemoryClientConfig
 from mindmemory_client.errors import MindMemoryAPIError
 from mindmemory_client.keygen import generate_ed25519_openssh_keypair
 from mindmemory_client.keys import load_ed25519_private_key
@@ -58,6 +58,30 @@ def _base_cfg(base_url: Optional[str]) -> MindMemoryClientConfig:
     if base_url:
         cfg = cfg.model_copy(update={"base_url": base_url})
     return cfg
+
+
+def _after_login_success(base_url: Optional[str]) -> None:
+    """登录/注册成功后初始化默认 Agent（BT-7274）工作区。"""
+    cfg_full = resolve_mmem_config(base_url_override=base_url)
+    res = ensure_default_agent_workspace(cfg_full)
+    st2 = load_state()
+    if not st2.current_agent_name:
+        st2.current_agent_name = DEFAULT_AGENT_NAME
+        save_state(st2)
+    if res.get("warning"):
+        typer.echo(res["warning"], err=True)
+    if res.get("register_error"):
+        typer.echo(
+            f"默认 Agent 服务端注册提示: {res['register_error']}（可稍后检查网络或 mmem agent init）",
+            err=True,
+        )
+    if res.get("clone_error"):
+        typer.echo(f"默认 Agent 记忆仓库 clone 失败: {res['clone_error']}", err=True)
+    uid = cfg_full.user_uuid
+    if uid and res.get("ok") and not res.get("skipped"):
+        typer.echo(
+            f"默认 Agent 工作区已就绪: {agent_workspace_dir(uid, DEFAULT_AGENT_NAME)}"
+        )
 
 
 @account_app.command("register")
@@ -116,7 +140,8 @@ def account_register(
 
     typer.echo(f"完成。user_uuid={user_uuid}")
     typer.echo(f"私钥已保存: {account_private_key_path(str(user_uuid))}")
-    typer.echo(f"当前账户已切换为此账号。PNMS 数据根: {default_pnms_data_root()}")
+    typer.echo(f"当前账户已切换为此账号。数据目录: {client_data_dir()}")
+    _after_login_success(base_url)
 
 
 @account_app.command("login")
@@ -155,6 +180,7 @@ def account_login(
         st.current_account_uuid = user_uuid
         save_state(st)
         typer.echo(f"已登录（使用本机私钥）。当前账户 user_uuid={user_uuid}")
+        _after_login_success(base_url)
         return
 
     backup_pw = getpass.getpass(
@@ -195,6 +221,7 @@ def account_login(
     st.current_account_uuid = user_uuid
     save_state(st)
     typer.echo(f"已登录并恢复私钥。user_uuid={user_uuid}")
+    _after_login_success(base_url)
 
 
 @account_app.command("logout")
@@ -206,6 +233,7 @@ def account_logout() -> None:
         return
     uid = st.current_account_uuid
     st.current_account_uuid = None
+    st.current_agent_name = None
     save_state(st)
     typer.echo(f"已登出（此前当前账户为 {uid}）。")
 
@@ -249,6 +277,7 @@ def account_use(
     st.current_account_uuid = meta.user_uuid
     save_state(st)
     typer.echo(f"当前账户: {meta.email} ({meta.user_uuid})")
+    _after_login_success(None)
 
 
 @account_app.command("whoami")

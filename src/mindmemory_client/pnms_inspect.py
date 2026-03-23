@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any
 
 
-def concept_checkpoint_root(pnms_data_root: Path, user_uuid: str, agent_name: str) -> Path:
-    """与 ``PnmsMemoryBridge`` / ``resolve_pnms_data_dir`` 一致的目录。"""
-    from mindmemory_client.pnms_bridge import resolve_pnms_data_dir
+def concept_checkpoint_root(_pnms_data_root: Path, user_uuid: str, agent_name: str) -> Path:
+    """与 ``PnmsMemoryBridge`` 一致的目录：``accounts/.../agents/.../pnms``。首参兼容旧接口，忽略。"""
+    from mindmemory_client.agent_workspace import agent_pnms_dir
 
-    return resolve_pnms_data_dir(Path(pnms_data_root), user_uuid, agent_name)
+    return agent_pnms_dir(user_uuid, agent_name)
 
 
 def load_concept_meta(root: Path) -> dict[str, Any] | None:
