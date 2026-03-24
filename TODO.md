@@ -55,7 +55,7 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 
 - [x] `agent_workspace`：提供 **`resolve_workspace_dir_for_user_agent`** 指向 `<agent>/workspace/`，与 `pnms`、`repo` 同级
 - [x] **`write_agent_config`** / **`ensure_default_agent_workspace`**：创建空 **`workspace/`**（清单仍由调用方写入）
-- [ ] 文档：`repo/.gitignore` 建议片段（避免误将 `../workspace` 绑进记忆仓）；`mmem-使用说明.md` 已补充 sync / merge / import-bundle 行为
+- [x] 文档：**`repo/.gitignore` 建议片段**见 [memory-repo-extended-layout.md §5.1](./docs/memory-repo-extended-layout.md)；`mmem-使用说明.md` 已补充 sync / merge / import-bundle 行为
 
 ### 清单 `.mmem-sync-manifest.json`
 

@@ -57,7 +57,7 @@
 
 - **文件路径（推荐）**：`<agent>/workspace/.mmem-sync-manifest.json`。
 - **性质**：**仅运行时**；由 **Claw 记忆插件在实例启动时** 或 **`mmem` 在 push 前** 写入/更新。
-- **不入 Git**：该文件位于 **`repo/` 之外**的 Agent 目录；即使将来工具误操作，也应在 **`repo/.gitignore`** 或文档中明确**勿将 `../workspace` 绑进记忆仓**。当前布局下 **`repo/` 与 `workspace/` 并列**，正常情况下**不会**提交该文件。
+- **不入 Git**：该文件位于 **`repo/` 之外**的 Agent 目录；即使将来工具误操作，也应在 **`repo/.gitignore`**（建议片段见 **§5.1**）或文档中明确**勿将 `../workspace` 绑进记忆仓**。当前布局下 **`repo/` 与 `workspace/` 并列**，正常情况下**不会**提交该文件。
 
 ### 3.2 语义
 
@@ -125,6 +125,34 @@
 ```
 
 **`repo.schema.json`** 可与 **`workspace`** 清单 **互补**：前者描述**仓里有什么密文**；后者描述**本地从 workspace 如何生成下一份 extras**。二者也可在将来合并为单一真相，本文保留分层以降低首轮实现成本。
+
+### 5.1 记忆仓库 `repo/.gitignore` 建议片段（可选）
+
+**目的**：记忆 Git 工作副本的根目录即 **`<agent>/repo/`**（clone 下来的目录）。其中**只应**跟踪 **`pnms_bundle.enc`**、**`mmem/bundles/*.enc`** 等**密文**及必要元数据；**不应**把 **Agent 侧 `../workspace/`** 下的明文（人格、草稿、运行时清单）通过**符号链接、子模块或误拷贝**纳入同一 Git 树。
+
+以下片段可放在 **`<agent>/repo/.gitignore`**（若文件已存在则**追加**相关规则；与团队既有规则冲突时以「不提交明文 workspace」为准则合并）：
+
+```gitignore
+# --- MMEM / mindmemory-client：避免将 Agent workspace 明文纳入记忆仓 ---
+# 若误在仓库内创建指向 ../workspace 的符号链接或同名目录，勿提交
+workspace
+workspace/
+
+# 本地解密/实验产生的明文副本（命名约定可按项目调整）
+*.plain.txt
+*.decrypted
+.mmem-local/
+
+# 常见本机杂文件（可选）
+.DS_Store
+Thumbs.db
+```
+
+说明：
+
+- **`workspace` / `workspace/`**：针对「在 **`repo/` 根下** 出现名为 `workspace` 的链接或目录」的情况；正常布局下 **`workspace/` 与 `repo/` 并列**，本规则**不会**影响 **`accounts/.../agents/<agent>/workspace`**（该路径在 Git 仓**外**）。
+- Git **不会**跟踪仓库目录之外的文件；本片段防的是 **把明文放进 `repo/` 树内**（含 `git add` 符号链接导致把敏感路径纳入版本对象的风险）。
+- 若使用 **Git LFS** 或其它大文件机制，可在同一 `.gitignore` 中另行约定，但**仍不应**用 LFS 存 workspace 明文；应继续只提交 **`*.enc`** 密文。
 
 ---
 
@@ -194,3 +222,4 @@
 |------|
 | v1：多 bundle、`mmem/` 布局 |
 | v2：**Agent 下 `workspace/` 与 `pnms`/`repo` 同级**；**`.mmem-sync-manifest.json` 为运行时、不入 Git**；Claw 与 CLI 共用 mindmemory-client 打包加密流程 |
+| v2.1：**§5.1** 增加 **`repo/.gitignore` 建议片段**（防误将 `repo/` 内指向 workspace 的链接/拷贝纳入版本库） |

@@ -188,7 +188,7 @@ mmem agent --help
 2. **`mmem agent init <名称>`**：向服务端请求注册（`begin-submit` + 失败型 `mark_completed` 释放锁）、在 `accounts/<user_uuid>/agents/<名称>/` 写入 `agent.json`、创建 **`pnms/`** 与将记忆仓库 **`git clone`** 到 **`repo/`**（使用账户私钥 `GIT_SSH_COMMAND`）。
 3. **`mmem chat --agent <名称>`**、**`mmem sync push --agent <名称>`** 会自动使用该工作区下的 **`pnms/`** 与 **`repo/`**（无需再手写 `--git-dir`，仍可显式覆盖）。
 
-**扩展（设计提案）**：与 **`pnms/`**、**`repo/`** 同级可增加 **`workspace/`**，用于存放 Claw 运行时或 CLI 侧「待选同步」的源文件；通过 **`workspace/.mmem-sync-manifest.json`**（**运行时填写、不进入记忆 Git**）声明本次要打包进加密 bundle 的路径，便于多实例插件与 **mindmemory-client** 统一协作。详见 **[memory-repo-extended-layout.md](./memory-repo-extended-layout.md)**。
+**扩展**：与 **`pnms/`**、**`repo/`** 同级有 **`workspace/`**（源文件池）；通过 **`workspace/.mmem-sync-manifest.json`**（**运行时填写、不进入记忆 Git**）声明要打进 **`mmem/bundles/extras.enc`** 的路径。记忆仓根目录 **`repo/.gitignore`** 建议片段见该文档 **§5.1**。全文：**[memory-repo-extended-layout.md](./memory-repo-extended-layout.md)**。
 
 OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 API（与 `agent_name` 一致）。
 
@@ -321,7 +321,7 @@ with MmemApiClient(cfg) as api:
 | 文档 | 内容 |
 |------|------|
 | [mindmemory-client-设计.md](./mindmemory-client-设计.md) | 架构、密钥、CLI 设计 |
-| [memory-repo-extended-layout.md](./memory-repo-extended-layout.md) | **（提案）** 记忆 Git 仓库多 bundle、固定记忆与 Claw 实例兼容布局 |
+| [memory-repo-extended-layout.md](./memory-repo-extended-layout.md) | **`workspace`**、清单、**`extras.enc`**、**`repo/.gitignore` 建议（§5.1）** |
 | [config.example.toml](./config.example.toml) | LLM profile 示例 |
 | `mindmemory/docs/mmem-web-api.md` | 后端 REST 约定 |
 | `mindmemory/tools/gen_register_bundle.py` | 注册用密钥与指纹辅助 |
