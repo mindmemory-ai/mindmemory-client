@@ -4,6 +4,8 @@
 
 **CLI 与 `pnms`：** `mmem` **不**直接 `import pnms`；对话、解密 bundle、合并与落盘一律通过 **`mindmemory_client`**（如 `PnmsMemoryBridge`、`memory_bundle.import_encrypted_bundle_to_agent_checkpoint`）。需安装同工作区 **`pnms`** 包，由库内 `pnms_bridge` 集中加载。
 
+**阅读指引**：§1 能力概览 → §2 安装 → §3 环境与 LLM 配置 → §4 账号 → **§5～11 `mmem` 各子命令** → **§12 `mindmemory_client` 库 API**（与 CLI 对照）。
+
 ---
 
 ## 1. 功能概览
@@ -22,14 +24,15 @@
 
 ## 2. 安装
 
-```bash
-# 需先安装同工作区的 PNMS（chat 与 PNMS 依赖）
-pip install -e /path/to/pnms
+**完整能力**（**`mmem chat`**、**`doctor`** 中的 PNMS、集成测试）：需先安装同工作区 **`pnms`**（依赖 **PyTorch** 等，体积较大）：
 
+```bash
+pip install -e /path/to/pnms
 pip install -e /path/to/mindmemory-client
-# 开发依赖（pytest 等）
-pip install -e ".[dev]"
+pip install -e ".[dev]"   # pytest 等开发依赖
 ```
+
+**仅库 API**（HTTP、加密、workspace 清单、**不**跑神经记忆）：可只 `pip install -e /path/to/mindmemory-client`，但 **`PnmsMemoryBridge`** / **`ChatMemorySession`** 会因引擎不可用而受限。更细的「最小 vs 完整」见仓库根 **[README.md](../README.md)**。
 
 安装后应可执行：
 
@@ -63,6 +66,10 @@ mmem --help
 | `MMEM_TIMEOUT_S` | HTTP 超时（秒） | `60` |
 | `MMEM_CONFIG_PATH` | 覆盖 `~/.mindmemory/config.toml` | 内置路径 |
 | `MMEM_LLM_PROFILE` / `MMEM_OLLAMA_URL` / `MMEM_OLLAMA_MODEL` / `MMEM_OLLAMA_API_TOKEN` | LLM 覆盖 | 见 `config.toml` |
+| `OPENAI_BASE_URL` | `backend=openai_chat` 时覆盖 **`openai_base_url`**（默认 `https://api.openai.com/v1`） | 未设置 |
+| `OPENAI_API_KEY` | `backend=openai_chat` 时写入 Bearer（与 `api_token` 二选一/覆盖） | 未设置 |
+| `MMEM_CHAT_DEBUG` | `1` / `true` 时等价于 **`mmem chat --verbose`**（每轮 stderr 打印 phase 等） | 未设置 |
+| `MMEM_CHAT_INCLUDE_EXTRAS` | `1` / `true` 时等价于 **`mmem chat --chat-extras`** | 未设置 |
 | `MMEM_CLIENT_CONFIG_DIR` / `MMEM_CLIENT_DATA_DIR` | 客户端主目录（默认均为 **`~/.mindmemory`**；可设 `MMEM_CLIENT_DATA_DIR` 单独把 PNMS 放别处） | `~/.mindmemory` |
 | `MMEM_ENV_FILE` | 仅加载该 `.env`（由 `env_loader` 读，须在首次加载前由 shell 设置） | 未设置 |
 | `MMEM_SKIP_DOTENV` | `1` 时不读 `.env`（pytest） | 未设置 |
@@ -119,27 +126,38 @@ export MMEM_PRIVATE_KEY_PATH=/path/to/private_key
 
 ## 5. CLI 命令总览
 
+以下为 **`mmem`** 完整子命令树（与源码 `mmem_cli/*.py` 一致）。不含子命令时 **`mmem models`** 默认执行与 **`mmem models list`** 相同行为。
+
 ```text
 mmem
-├── doctor              # 环境检查（含记忆引擎是否可被库加载）
-├── models              # 列出 LLM profile
-├── chat                # 对话（ChatMemorySession / PnmsMemoryBridge）
-├── agent               # Agent 工作区：checkpoint 目录 + 记忆 Git 仓库（clone）
-│   ├── init            # 服务端注册 Agent/仓、本地目录、git clone
-│   └── info            # 工作区 / pnms / repo 路径
-├── pnms                # 查看 checkpoint 目录（概念 meta、graph.db；读盘，不 import pnms）
-│   ├── status          # 目录 / meta / 边数摘要
-│   ├── concepts        # meta.json 与各 .pt
-│   └── graph           # graph.db 边（按权降序）
-├── account             # 多账户：注册、登录、登出、切换、whoami
-├── sync
-│   ├── encrypt-file    # 任意文件 → K_seed AES-GCM → Base64
-│   ├── decrypt-file    # 逆操作
-│   ├── push            # 打包 checkpoint → pnms_bundle.enc → git + MMEM sync
-│   └── ping            # GET /me、/agents
-└── memory
-    ├── merge           # git fetch + pull --rebase；可选 --import-bundle
-    └── import-bundle   # 解密 pnms_bundle.enc → memory_bundle 合并并落盘
+├── doctor                    # §6：环境、pnms 可加载性、/health、Ollama /api/tags
+├── models                    # §7：LLM profile（config.toml）
+│   ├── list                  # 列出所有 profile 与解析后的默认项
+│   ├── configure             # 写入/更新单个 profile（-p -t -M --url --api-token 等）
+│   └── tags                  # GET Ollama /api/tags（本机或 remote）
+├── chat                      # §9：对话（PNMS + LLM）
+├── agent                     # §8：Agent 工作区（pnms + repo + workspace）
+│   ├── list                  # 本机已 init 的 Agent；可选 --remote 拉服务端列表
+│   ├── current               # 打印当前默认 Agent 名
+│   ├── use <名称>            # 设置 state 中的默认 Agent
+│   ├── unset                 # 清除 current_agent_name，回退内置 BT-7274
+│   ├── init <名称>           # 服务端注册、本地目录、git clone 记忆仓
+│   └── info                  # 打印 workspace / pnms / repo 等路径
+├── pnms                      # §9.2：只读查看 checkpoint 落盘（概念、graph.db）
+│   ├── status
+│   ├── concepts
+│   └── graph
+├── account                   # §5.1：多账户
+│   ├── register | login | logout | list | use | whoami
+├── sync                      # §10
+│   ├── encrypt-file
+│   ├── decrypt-file
+│   ├── extras-dry-run        # §10.2.1：仅列出将打入 extras 的路径
+│   ├── push
+│   └── ping
+└── memory                    # §11
+    ├── merge                 # git 对齐；可选 --import-bundle / --import-extras
+    └── import-bundle         # 仅解密合并 bundle（可选 --import-extras / --extras-only）
 ```
 
 查看帮助：
@@ -147,10 +165,12 @@ mmem
 ```bash
 mmem --help
 mmem account --help
+mmem agent --help
+mmem models --help
 mmem sync --help
 mmem memory --help
 mmem pnms --help
-mmem agent --help
+mmem chat --help
 ```
 
 ---
@@ -178,11 +198,28 @@ mmem agent --help
 
 ## 7. `mmem models`
 
-列出 `config.toml` 中的 profile 及解析后的默认 profile；用于确认 Ollama 地址与模型名。
+配置文件默认为 **`~/.mindmemory/config.toml`**，可用 **`MMEM_CONFIG_PATH`** / **`--config`** 覆盖。
+
+| 子命令 | 说明 |
+|--------|------|
+| （无子命令）或 **`list`** | 列出所有 `[[llm.profiles]]`、**`default_profile`**，并打印 **`resolve_profile(..., None)`** 解析后的默认项（含 `backend`、`ollama_model`、有效 URL、token 掩码）。 |
+| **`configure`** | 交互或参数写入单个 profile：**`--profile`**、**`--target`** `local\|remote`、**`--model`**、**`--url`**、**`--api-token`** / **`--token-stdin`** / **`--no-token`**、**`--timeout`**、**`--set-default`**。当前实现写入 **`backend=ollama`**（见源码）。 |
+| **`tags`** | 对 **`--url`** 或当前默认 profile 的 Ollama 根地址请求 **`GET /api/tags`**，列出已安装模型名与 size。 |
+
+OpenAI 兼容 profile 需在 TOML 中设 **`backend = "openai_chat"`**（见 [config.example.toml](./config.example.toml)），或配合 **`OPENAI_API_KEY`** / **`OPENAI_BASE_URL`**；**`mmem models configure`** 不直接生成 `openai_chat`，需手改或后续扩展 CLI。
 
 ---
 
 ## 8. `mmem agent`（工作区与记忆仓库）
+
+| 子命令 | 说明 |
+|--------|------|
+| **`list`** | 本机已 **`mmem agent init`** 的 Agent 与 workspace 根路径；**`-r` / `--remote`** 时额外请求 **`GET /api/v1/agents`**；**`--json`** 输出结构化结果。 |
+| **`current`** | 打印当前解析的默认 Agent 名（**`state.current_agent_name`** 或内置 **`BT-7274`**）。 |
+| **`use <名称>`** | 将 **`state.json`** 中 **`current_agent_name`** 设为该 Agent（需本机已有对应工作区）。 |
+| **`unset`** | 删除 **`current_agent_name`**，恢复与内置默认名一致。 |
+| **`init <名称>`** | 见下文流程：服务端注册 + 本地 **`pnms/`**、**`repo/`**、**`workspace/`**。 |
+| **`info`** | 打印当前账户下该 Agent 的 **`workspace`**、**`pnms`**、**`repo`**、**`agent.json`** 等路径。 |
 
 远端 **Gogs 仓库** 在 MindMemory **首次 `begin-submit`** 时由服务端创建（见服务端 `sync` 路由）。CLI 侧推荐顺序：
 
@@ -310,29 +347,164 @@ OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 AP
 
 ---
 
-## 12. Python 库（简要）
+## 12. Python 库 `mindmemory_client`（API 参考）
+
+以下与 **`from mindmemory_client import …`** 的 **`__all__`** 对齐（见 `src/mindmemory_client/__init__.py`）。集成方应通过这些入口使用能力；**不要**在业务代码中直接 **`import pnms`**（除非维护 `pnms` 本身）。
+
+### 12.1 配置、凭证与日志
+
+| 符号 | 用途 |
+|------|------|
+| **`MindMemoryClientConfig`** | Pydantic 模型：`base_url`、`user_uuid`、`private_key_path`、`pnms_data_root`、`timeout_s`、`agent_name`；**`from_env()`** 从环境读取（与 `MMEM_CREDENTIAL_SOURCE` 联动）。 |
+| **`DEFAULT_AGENT_NAME`** | 默认 Agent 名（当前为 **`BT-7274`**）。 |
+| **`resolve_mmem_config()`** | 合并 **state.json**、**账户目录**、**Typer 覆盖** 等，返回 **`MindMemoryClientConfig`**；**`mmem`** 各命令的入口。 |
+| **`ClientEnvSettings`** / **`get_client_settings()`** | Pydantic Settings：仅声明 **`MMEM_BASE_URL`**、**`MMEM_PNMS_DATA_ROOT`**、超时、**`MMEM_CREDENTIAL_SOURCE`**、**`MMEM_USER_UUID`**、**`MMEM_PRIVATE_KEY_PATH`**。 |
+| **`credential_source()`** | 返回 **`account`** \| **`env`** \| **`none`**。 |
+| **`default_client_home()`** | 客户端主目录（默认 **`~/.mindmemory`**）。 |
+| **`configure_client_logging()`** | 配置根 logger；**`MMEM_LOG_LEVEL`** / **`MMEM_LOG_FILE`** / **`MMEM_LOG_FORMAT`**。 |
+| **`MindMemoryAPIError`** | HTTP 客户端异常。 |
+
+典型用法：
+
+```python
+from mindmemory_client import resolve_mmem_config, MindMemoryClientConfig
+
+cfg: MindMemoryClientConfig = resolve_mmem_config(
+    base_url_override=None,
+    agent_name_override="MyAgent",  # 可选
+)
+# cfg.user_uuid / cfg.private_key_path / cfg.agent_name
+```
+
+### 12.2 MindMemory HTTP：`MmemApiClient`
+
+**`with MmemApiClient(cfg) as api:`** 使用同一 **`httpx.Client`**（超时见 **`cfg.timeout_s`**）。
+
+| 方法 | HTTP | 说明 |
+|------|------|------|
+| **`health()`** | `GET /health` | 根健康检查（**无** `/api/v1` 前缀）。 |
+| **`get_me(user_uuid)`** | `GET /api/v1/me`，Header **`X-User-UUID`** | 当前用户资料。 |
+| **`list_agents(user_uuid)`** | `GET /api/v1/agents` | Agent 列表。 |
+| **`get_encrypted_private_key_backup(user_uuid)`** | `GET /api/v1/me/encrypted-private-key-backup` | 换机恢复私钥备份。 |
+| **`begin_submit(user_uuid, agent_name, holder_info=...)`** | `POST /api/v1/sync/begin-submit` | Body 含 **Ed25519** 签名（**`mindmemory_client.sync.build_begin_submit_payload`** + **`sign_payload`**）；需 **`cfg.private_key_path`**。 |
+| **`mark_completed(...)`** | `POST /api/v1/sync/mark-completed` | 释放锁并上报提交结果；**`build_mark_completed_payload`**。 |
+
+异常：**`MindMemoryAPIError`**（含 **`status_code`**、**`detail`**）。
+
+### 12.3 同步签名（低层）
+
+模块 **`mindmemory_client.sync`**（非包根重导出，需子模块导入）：
+
+- **`build_begin_submit_payload(user_uuid, agent_name, ts=None)`** → JSON 字符串。  
+- **`build_mark_completed_payload(user_uuid, agent_name, lock_uuid, commit_id, ts=None)`** → JSON 字符串。  
+- **`sign_payload(payload: str, ed25519_private_key)`** → Base64 签名。
+
+与 **`mindmemory/tests/test_integration_flow.py`** 字段一致；**`mmem sync push`** 通过 **`MmemApiClient`** 调用，一般无需直接拼 payload。
+
+### 12.4 记忆加密与注册材料
+
+| 符号 | 用途 |
+|------|------|
+| **`encrypt_memory_base64` / `decrypt_memory_base64`** | AES-256-GCM，与 **`pnms_bundle.enc`** / **`extras.enc`** 相同格式（nonce‖密文‖tag → Base64 单行）。 |
+| **`encrypt_memory_payload` / `decrypt_memory_payload`** | 二进制载荷加解密（若使用块 API）。 |
+| **`read_openssh_private_key_pem`** | 读 OpenSSH 私钥 PEM。 |
+| **`k_seed_bytes_from_private_key_openssh`** | **`K_seed`** 32 字节（与注册 **`encrypted_password`** 一致）。 |
+| **`key_fingerprint_from_public_key_ssh`** / **`encrypted_password_hex_from_private_key_openssh`** | 注册/指纹辅助。 |
+
+### 12.5 PNMS 桥接与会话
+
+需已安装 **`pnms`**；否则 **`is_memory_engine_available()`** 为 False。
+
+| 符号 | 用途 |
+|------|------|
+| **`PnmsMemoryBridge(cfg.pnms_data_root, user_id, agent_name, checkpoint_dir=...)`** | 构造本地引擎客户端；**`handle_chat_turn(query, llm, ...)`** → **`ChatTurnResult`**（**`response`**、**`context`**、**`num_slots_used`**、**`phase`**）。 |
+| **`ChatMemorySession(bridge, system_prompt=...)`** | **`handle_turn(query, llm, ...)`** 封装 **`handle_chat_turn`**；**`save_checkpoint()`** 落盘。 |
+| **`ChatTurnResult`** | 单轮结构化结果（frozen dataclass）。 |
+| **`MemoryEngineError`** | 引擎侧错误；**`format_memory_engine_error`** 格式化为可读字符串。 |
+| **`is_memory_engine_available()`** | 能否 import 记忆引擎。 |
+| **`peek_checkpoint_version_info`** / **`resolve_pnms_data_dir`** | checkpoint 辅助。 |
+
+LLM 回调类型：**`(query: str, context: str) -> str`**。CLI 中由 **`build_ollama_llm`** / **`build_openai_chat_llm`**（**子模块**，见 §12.9）生成。
+
+### 12.6 Bundle 合并（与 `mmem memory import-bundle` 一致）
+
+```python
+from mindmemory_client import import_encrypted_bundle_to_agent_checkpoint, MindMemoryClientConfig
+
+# bundle_path: pnms_bundle.enc；key: K_seed 32 字节
+meta = import_encrypted_bundle_to_agent_checkpoint(
+    bundle_path=...,
+    key=...,
+    dest_pnms_dir=...,
+    cfg=...,
+    user_uuid=...,
+    agent_name=...,
+)
+```
+
+失败抛出 **`MemoryEngineError`**。
+
+### 12.7 Workspace 清单、extras、prompt
+
+| 符号 | 用途 |
+|------|------|
+| **`WORKSPACE_CONFIG_FILENAME`**、**`MANIFEST_FILENAME`** | 固定为 **`mmem-workspace.json`**。 |
+| **`EXTRAS_BUNDLE_REPO_RELPATH`** | 仓内 **`mmem/bundles/extras.enc`**。 |
+| **`SUPPORTED_SCHEMA_VERSION`** | 当前 **`"2"`**。 |
+| **`WorkspaceConfig`**、**`PromptSection`**、**`SyncManifestError`** | 清单模型与校验错误。 |
+| **`load_workspace_config(path)`** | 解析 JSON → **`WorkspaceConfig`**。 |
+| **`prompt_context_paths_for_workspace(workspace, config)`** | 解析 **`prompt.include`** → 待读文件列表。 |
+| **`resolve_workspace_config_path(workspace_root)`** | 返回 **`mmem-workspace.json`** 路径或 **`None`**。 |
+| **`pack_workspace_extras_to_enc`** | 按 **`sync.bundles`** 打 tar.gz → **`encrypt_memory_base64`**。 |
+| **`pack_workspace_extras_from_manifest_file`** | 同上，从清单文件路径加载。 |
+| **`dry_run_workspace_extras_paths`** | 仅列出将打入 tar 的相对路径。 |
+| **`decrypt_extras_bundle_file_to_workspace`** | 读 **`extras.enc`** 文件 → 解压到 **`workspace/`**。 |
+| **`read_extras_enc_text_block(bundle_path, key)`** | 解密 tar 内 UTF-8 文本，拼成 **`[path]`** 块（供 LLM，见 §6）。 |
+| **`read_workspace_prompt_block(workspace_root)`** | 读 **`prompt.include`** → 单块文本 + warnings。 |
+| **`merge_workspace_prompt_and_extras(prompt_block, extras_block, extras_section_intro=...)`** | 按 §6 顺序拼接。 |
+
+宿主还可直接使用 **`mindmemory_client.agent_workspace`** 中的 **`resolve_workspace_dir_for_user_agent`**、**`resolve_git_dir_for_sync`**、**`agent_workspace_dir`** 等（见源码 docstring）。
+
+### 12.8 其他常用子模块（按需 import）
+
+| 模块 | 内容 |
+|------|------|
+| **`mindmemory_client.llm_profiles`** | **`LlmProfile`**、**`load_llm_profiles_from_toml`**、**`resolve_profile`**、**`effective_ollama_url`**、**`upsert_llm_profile`**。 |
+| **`mindmemory_client.ollama_llm`** | **`build_ollama_llm(profile, workspace_block=..., lang=..., dump_prompt_path=...)`**；**`ollama_health`**。 |
+| **`mindmemory_client.openai_chat_llm`** | **`build_openai_chat_llm(...)`**（OpenAI 兼容 **`/v1/chat/completions`**）。 |
+| **`mindmemory_client.memory_schema`** | **`resolve_memory_schema_version`**（与 **`mmem sync`** 分支名一致）。 |
+| **`mindmemory_client.env_loader`** | **`get_env`**（读环境变量，供库内与测试）。 |
+
+### 12.9 最小可运行示例（API + 会话，需 pnms）
 
 ```python
 from mindmemory_client import (
-    MmemApiClient,
+    resolve_mmem_config,
     PnmsMemoryBridge,
     ChatMemorySession,
-    ChatTurnResult,
-    MemoryEngineError,
-    import_encrypted_bundle_to_agent_checkpoint,
-    format_memory_engine_error,
-    is_memory_engine_available,
-    resolve_mmem_config,
-    encrypt_memory_base64,
-    decrypt_memory_base64,
+    MmemApiClient,
 )
+from mindmemory_client.ollama_llm import build_ollama_llm
+from mindmemory_client.llm_profiles import load_llm_profiles_from_toml, resolve_profile, default_config_path
 
 cfg = resolve_mmem_config()
+assert cfg.user_uuid
+bridge = PnmsMemoryBridge(
+    cfg.pnms_data_root,
+    cfg.user_uuid,
+    cfg.agent_name,
+    checkpoint_dir=...,  # 通常 accounts/.../agents/.../pnms
+)
+prof = resolve_profile(load_llm_profiles_from_toml(default_config_path()), None)
+llm = build_ollama_llm(prof, workspace_block=None, lang="zh")
+session = ChatMemorySession(bridge, system_prompt="你是助手。")
+result = session.handle_turn("你好", llm)
+print(result.response)
+session.save_checkpoint()
+
 with MmemApiClient(cfg) as api:
     api.health()
 ```
-
-更多模块：`memory_bundle`、`pnms_bridge`、`register_crypto`、`memory_crypto`、`sync`（payload 签名）、`api` 等，见源码包 `src/mindmemory_client/`。集成方应通过上述公开 API 使用记忆能力，**避免**在插件/业务代码中直接 `import pnms`（除非维护 `pnms` 本身）。
 
 ---
 
