@@ -42,8 +42,8 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 
 ## 联调（需本机环境，不自动 CI）
 
-- [ ] 对真实 `MMEM_BASE_URL`：手动运行 `mmem doctor` + `mmem chat -m "hi" --llm mock`（`--no-remote` 已可离线验证 PNMS）
-- [ ] `MMEM_INTEGRATION=1`（mindmemory 仓库）全链路：需 MySQL、Gogs、已注册账号与私钥
+- [x] 对真实 `MMEM_BASE_URL`：手动运行 `mmem doctor` + `mmem chat -m "hi" --llm mock`（`--no-remote` 已可离线验证 PNMS）
+- [x] `MMEM_INTEGRATION=1`（mindmemory 仓库）全链路：需 MySQL、Gogs、已注册账号与私钥；示例：`cd ../mindmemory && MMEM_INTEGRATION=1 MMEM_BASE_URL=http://127.0.0.1:8000 GOGS_REPO_ROOT=…/mindmemory/.data/gogs-repositories python -m pytest tests/test_integration_flow.py -v`
 
 ---
 
