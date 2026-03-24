@@ -37,6 +37,7 @@ from mindmemory_client.sync_manifest import (
 )
 from mindmemory_client.workspace_extras import (
     decrypt_extras_bundle_file_to_workspace,
+    dry_run_workspace_extras_paths,
     pack_workspace_extras_to_enc,
 )
 from mindmemory_client.client_home import default_client_home
@@ -79,5 +80,6 @@ __all__ = [
     "SyncManifestError",
     "load_sync_manifest",
     "pack_workspace_extras_to_enc",
+    "dry_run_workspace_extras_paths",
     "decrypt_extras_bundle_file_to_workspace",
 ]

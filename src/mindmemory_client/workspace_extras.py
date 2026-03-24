@@ -48,6 +48,25 @@ def pack_workspace_extras_from_manifest_file(
     return pack_workspace_extras_to_enc(m, workspace_root, key)
 
 
+def dry_run_workspace_extras_paths(
+    workspace_root: Path,
+    *,
+    manifest_path: Path | None = None,
+) -> tuple[list[str], list[str]]:
+    """
+    解析清单，返回将写入 tar 的成员路径（相对 ``workspace_root`` 的 POSIX 路径）与 warnings。
+    不加密、不写文件、不需要 ``K_seed``。
+    """
+    wp = workspace_root.resolve()
+    mp = manifest_path if manifest_path is not None else (wp / MANIFEST_FILENAME)
+    if not mp.is_file():
+        raise SyncManifestError(f"未找到清单: {mp}")
+    m = load_sync_manifest(mp)
+    files, warnings = manifest_paths_for_pack(wp, m)
+    arcnames = [arc for _abs, arc in files]
+    return arcnames, warnings
+
+
 def decrypt_extras_bundle_bytes_to_workspace(
     plain_tgz: bytes,
     workspace_root: Path,

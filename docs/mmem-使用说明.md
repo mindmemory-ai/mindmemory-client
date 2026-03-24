@@ -252,6 +252,10 @@ OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 AP
 
 **无记忆仓库路径**（未 `--git-dir` 且未 `agent init`）：仅生成当前目录 `pnms_bundle.enc`，不占锁。
 
+### 10.2.1 `mmem sync extras-dry-run`
+
+根据 **`workspace/.mmem-sync-manifest.json`**（或 **`--manifest`**）解析 **`include`**，**仅打印**将打入 extras **tar** 的相对路径（**不**加密、**不**写 `repo/`）。需已登录（解析 `user_uuid` 与默认 `workspace`）。**`--json`** 输出 `arcnames` 与 `warnings` 数组。
+
 ### 10.3 `mmem sync ping`
 
 需已解析的 **`user_uuid`**，调用 **`GET /api/v1/me`** 与 **`GET /api/v1/agents`**（Header `X-User-UUID`），用于验证账号与 Agent 列表。

@@ -408,6 +408,67 @@ def sync_decrypt_file(
         sys.stdout.buffer.write(plain)
 
 
+@sync_app.command("extras-dry-run")
+def sync_extras_dry_run(
+    agent: Optional[str] = typer.Option(
+        None,
+        "--agent",
+        help="Agent 名称；省略则使用 mmem agent use 所设或默认 BT-7274",
+    ),
+    workspace: Optional[Path] = typer.Option(
+        None,
+        "--workspace",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        help="workspace 根目录；默认 accounts/<user>/agents/<agent>/workspace",
+    ),
+    manifest: Optional[Path] = typer.Option(
+        None,
+        "--manifest",
+        exists=True,
+        readable=True,
+        help="清单路径；默认 <workspace>/.mmem-sync-manifest.json",
+    ),
+    json_out: bool = typer.Option(False, "--json", help="JSON 输出 arcnames 与 warnings"),
+    base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
+) -> None:
+    """根据清单列出将打入 extras tar 的相对路径（不加密、不写 repo）。"""
+    cfg = resolve_mmem_config(base_url_override=base_url, agent_name_override=agent)
+    require_authenticated_user(cfg)
+    agent = cfg.agent_name
+    uid = cfg.user_uuid
+    assert uid is not None
+
+    from mindmemory_client.agent_workspace import resolve_workspace_dir_for_user_agent
+    from mindmemory_client.sync_manifest import SyncManifestError
+    from mindmemory_client.workspace_extras import dry_run_workspace_extras_paths
+
+    ws = workspace if workspace is not None else resolve_workspace_dir_for_user_agent(uid, agent)
+    try:
+        arcnames, warnings = dry_run_workspace_extras_paths(ws, manifest_path=manifest)
+    except SyncManifestError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+
+    if json_out:
+        typer.echo(
+            json.dumps(
+                {"workspace": str(ws.resolve()), "arcnames": arcnames, "warnings": warnings},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
+    typer.echo(f"workspace: {ws.resolve()}")
+    typer.echo(f"将打入 tar 的路径（{len(arcnames)} 个）:")
+    for a in arcnames:
+        typer.echo(f"  {a}")
+    for w in warnings:
+        typer.echo(f"  [提示] {w}")
+
+
 @sync_app.command("push")
 def sync_push(
     agent: Optional[str] = typer.Option(

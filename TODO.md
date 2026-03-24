@@ -78,7 +78,7 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 
 - [x] **`mmem sync push --sync-extras`**：清单存在则生成 **`mmem/bundles/extras.enc`** 并与 **`pnms_bundle.enc`** 同批 **`git add` / commit**
 - [x] **`mmem memory merge --import-extras`**；**`mmem memory import-bundle --import-extras`** / **`--extras-only`**
-- [ ] （可选）干跑：仅列出将打入 tar 的路径
+- [x] （可选）干跑：**`mmem sync extras-dry-run`**（**`--json`**）仅列出将打入 extras tar 的相对路径
 
 ### 测试与安全
 
