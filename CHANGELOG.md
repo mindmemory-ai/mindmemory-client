@@ -2,6 +2,16 @@
 
 本文件遵循语义化版本（MAJOR.MINOR.PATCH），与 `pyproject.toml` 的 `version` 对齐。
 
+## [0.2.1] — 2026-03-24
+
+### Changed
+
+- **许可证**：由 MIT 改为 **[PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/)**（**`LICENSE`**）；**非商业免费使用**，商业用途须另行取得授权。
+
+### Documentation
+
+- **README**：扩充项目介绍、文档索引表（`docs/` 各文件）、许可摘要、功能概览、快速开始与仓库布局。
+
 ## [0.2.0] — 2026-03-24
 
 ### Added

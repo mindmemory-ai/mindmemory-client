@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mindmemory-client"
-version = "0.2.0"
+version = "0.2.1"
 description = "Client library: PNMS + MindMemory Web API; includes mmem CLI."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "PolyForm Noncommercial License 1.0.0" }
 dependencies = [
   "httpx>=0.27",
   "cryptography>=41",
@@ -32,6 +32,9 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 mindmemory_client = ["agent/**/*"]
+
+[tool.setuptools]
+license-files = ["LICENSE"]
 
 [tool.pytest.ini_options]
 markers = [
