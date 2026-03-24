@@ -1,4 +1,8 @@
-"""mmem：与 LLM 对话 + PNMS 记忆；默认本地 Ollama，可配置多 profile。"""
+"""mmem：MindMemory 官方示例 CLI（仅依赖 ``mindmemory_client``）。
+
+对话、记忆 bundle、同步等一律通过库内 API（如 ``PnmsMemoryBridge``、``import_encrypted_bundle_to_agent_checkpoint``）；
+**不**在 CLI 中 ``import pnms``；底层引擎由 ``mindmemory_client.pnms_bridge`` 集中加载。默认本地 Ollama，可配置多 profile。
+"""
 
 from __future__ import annotations
 
@@ -28,7 +32,10 @@ from mmem_cli.pnms_cmds import pnms_app
 
 logger = logging.getLogger(__name__)
 
-app = typer.Typer(no_args_is_help=True, help="MindMemory 客户端：PNMS + MMEM API；默认 Ollama")
+app = typer.Typer(
+    no_args_is_help=True,
+    help="MindMemory 示例客户端（mindmemory_client：记忆引擎 + MMEM API）；默认 Ollama",
+)
 
 
 def _llm_mock():
@@ -72,15 +79,15 @@ def doctor(
     base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
     config_path: Optional[Path] = typer.Option(None, "--config", help="mmem 配置 TOML", envvar="MMEM_CONFIG_PATH"),
 ) -> None:
-    """检查依赖、MindMemory /health、本地 Ollama /api/tags。"""
+    """检查依赖、记忆引擎是否可被 mindmemory_client 加载、MindMemory /health、Ollama /api/tags。"""
     typer.echo("Python:", nl=False)
     typer.echo(f" {sys.version.split()[0]}")
-    try:
-        import pnms  # noqa: F401
+    from mindmemory_client.pnms_bridge import is_memory_engine_available
 
-        typer.echo("pnms: 已导入")
-    except ImportError:
-        typer.echo("pnms: 未安装（请先 pip install -e ../pnms）", err=True)
+    if is_memory_engine_available():
+        typer.echo("记忆引擎 (pnms): 已安装")
+    else:
+        typer.echo("记忆引擎 (pnms): 未安装（请先 pip install -e ../pnms）", err=True)
 
     cfg = resolve_mmem_config(base_url_override=base_url)
     url = cfg.base_url.rstrip("/")
@@ -110,7 +117,7 @@ def doctor(
     else:
         typer.echo("当前账户（state）: 未选择（account 模式可用 mmem account login）")
     typer.echo(f"数据目录（pnms_data_root 默认与此一致）: {client_data_dir()}")
-    typer.echo(f"PNMS checkpoint 路径: accounts/<user_uuid>/agents/<agent>/pnms（与默认 Agent 一致）")
+    typer.echo("checkpoint 目录: accounts/<user_uuid>/agents/<agent>/pnms（由 mindmemory_client 读写，CLI 不直接 import pnms）")
     typer.echo(f"默认 Agent（mmem chat / sync 等省略 --agent 时）: {cfg.agent_name}")
     if st.current_agent_name:
         typer.echo(f"  （state.current_agent_name={st.current_agent_name!r}；可用 mmem agent list / use）")
@@ -135,7 +142,7 @@ def doctor(
     )
     typer.echo(
         f"默认 memory_schema_version（sync push / memory merge）: {resolve_memory_schema_version(None)} "
-        f"（PNMS get_memory_format_version；可用 --schema 覆盖）"
+        f"（与已安装记忆引擎的格式版本一致；可用 --schema 覆盖）"
     )
 
     from mindmemory_client.env_loader import get_env
@@ -183,12 +190,12 @@ def chat(
     no_remote: bool = typer.Option(False, "--no-remote", help="不请求 MindMemory HTTP"),
     base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
 ) -> None:
-    """交互对话或 -m 单次；每轮更新 PNMS 记忆。默认走本地 Ollama。"""
+    """交互对话或 -m 单次；每轮经 ``ChatMemorySession`` / ``PnmsMemoryBridge`` 更新记忆并落盘。默认走本地 Ollama。"""
     try:
         from mindmemory_client.pnms_bridge import PnmsMemoryBridge
         from mindmemory_client.session import ChatMemorySession
     except ImportError as e:
-        typer.echo(f"导入失败: {e}（请先 pip install -e ../pnms）", err=True)
+        typer.echo(f"导入失败: {e}（需可安装 ``pip install -e ../pnms`` 供 mindmemory_client 加载）", err=True)
         raise typer.Exit(1)
 
     cfg = resolve_mmem_config(base_url_override=base_url, agent_name_override=agent)
@@ -247,7 +254,7 @@ def chat(
 
 sync_app = typer.Typer(help="MindMemory 同步：API、记忆 AES-GCM、git 推送")
 
-memory_app = typer.Typer(help="PNMS 记忆（合并等）")
+memory_app = typer.Typer(help="记忆 Git 对齐与加密 bundle 导入（mindmemory_client.memory_bundle）")
 
 
 def _git_remote_origin_url(git_dir: Path) -> str:
@@ -643,12 +650,17 @@ def memory_import_bundle(
         readable=True,
         help="密文文件路径；默认 <git-dir>/pnms_bundle.enc（仅指定 --bundle 时可省略 --git-dir）",
     ),
-    dry_run: bool = typer.Option(False, "--dry-run", help="仅打印路径与将执行步骤，不写盘、不调 PNMS"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="仅打印 bundle 路径与目标 pnms 目录；不写盘、不调用 mindmemory_client 记忆引擎",
+    ),
     base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
 ) -> None:
     """
-    将 ``pnms_bundle.enc``（tar.gz + AES-GCM）解密到临时目录，再对当前 Agent 的 ``…/agents/<agent>/pnms``
-    调用 PNMS ``merge`` 与远端 checkpoint **数据融合**，最后 ``save_concept_modules`` 落盘（见 pnms_api §4.4）。
+    解密 ``pnms_bundle.enc`` 至临时目录，经 ``mindmemory_client.memory_bundle.import_encrypted_bundle_to_agent_checkpoint``
+    合并进当前 Agent 的 ``…/agents/<agent>/pnms`` 并落盘（内部使用 ``PnmsMemoryBridge.merge_external_checkpoint`` + ``persist_checkpoint``）。
+    底层合并语义见已安装的 ``pnms`` 包文档 ``docs/pnms_api.md``。
     """
     cfg = resolve_mmem_config(base_url_override=base_url, agent_name_override=agent)
     require_authenticated_user(cfg)
@@ -683,21 +695,22 @@ def memory_import_bundle(
 
     dest = resolve_pnms_dir_for_user_agent(cfg, uid, agent)
     if dry_run:
-        typer.echo(f"将解密并解压到: {dest}")
-        typer.echo(f"来源: {bundle_path}")
+        typer.echo(f"目标 checkpoint 目录: {dest}")
+        typer.echo(f"bundle 文件: {bundle_path}")
         return
 
     from mindmemory_client.keys import read_openssh_private_key_pem
     from mindmemory_client.register_crypto import k_seed_bytes_from_private_key_openssh
-    from mindmemory_client.pnms_import import (
-        format_pnms_merge_error,
-        import_pnms_bundle_to_agent_checkpoint,
+    from mindmemory_client.memory_bundle import (
+        format_memory_engine_error,
+        import_encrypted_bundle_to_agent_checkpoint,
     )
+    from mindmemory_client.memory_errors import MemoryEngineError
 
     pem = read_openssh_private_key_pem(Path(cfg.private_key_path))
     key = k_seed_bytes_from_private_key_openssh(pem)
     try:
-        meta = import_pnms_bundle_to_agent_checkpoint(
+        meta = import_encrypted_bundle_to_agent_checkpoint(
             bundle_path=bundle_path,
             key=key,
             dest_pnms_dir=dest,
@@ -705,16 +718,10 @@ def memory_import_bundle(
             user_uuid=uid,
             agent_name=agent,
         )
-    except Exception as e:
-        try:
-            from pnms import PNMSError
-        except ImportError:
-            raise
-        if isinstance(e, PNMSError):
-            typer.echo(format_pnms_merge_error(e), err=True)
-            raise typer.Exit(1)
-        raise
-    typer.echo(f"已与 bundle 融合并保存 PNMS → {dest}")
+    except MemoryEngineError as e:
+        typer.echo(format_memory_engine_error(e), err=True)
+        raise typer.Exit(1)
+    typer.echo(f"已与 bundle 融合并保存 checkpoint → {dest}")
     typer.echo(f"槽数量: {meta.get('num_slots')}")
 
 
@@ -742,14 +749,14 @@ def memory_merge(
     import_bundle: bool = typer.Option(
         False,
         "--import-bundle",
-        help="pull 成功后解密 pnms_bundle.enc 并与本 Agent pnms/ 做 PNMS merge 融合（需私钥）",
+        help="pull 成功后解密 pnms_bundle.enc 并调用库 API 合并到本 Agent pnms/（需私钥）",
     ),
     base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
 ) -> None:
     """
     拉取远端并尝试 ``git pull --rebase origin <schema>``，使本地与远端提交历史对齐。
 
-    可选 ``--import-bundle``：对齐后解密 ``pnms_bundle.enc`` 并与本地 PNMS 运行态 **merge** 融合后保存。
+    可选 ``--import-bundle``：Git 对齐后调用 ``import_encrypted_bundle_to_agent_checkpoint``（与 ``mmem memory import-bundle`` 相同）。
     """
     from mindmemory_client.agent_workspace import resolve_git_dir_for_sync
 
@@ -771,7 +778,9 @@ def memory_merge(
         typer.echo(f"将执行: git -C {git_dir} fetch origin")
         typer.echo(f"将执行: git -C {git_dir} pull --rebase origin {schema}")
         if import_bundle:
-            typer.echo(f"将执行: mmem memory import-bundle --git-dir {git_dir}（解密 {git_dir}/pnms_bundle.enc）")
+            typer.echo(
+                f"将执行: 解密 {git_dir}/pnms_bundle.enc 并经 mindmemory_client.memory_bundle 合并到本 Agent pnms/"
+            )
         return
     try:
         subprocess.run(
@@ -811,17 +820,18 @@ def memory_merge(
             raise typer.Exit(1)
         from mindmemory_client.agent_workspace import resolve_pnms_dir_for_user_agent
         from mindmemory_client.keys import read_openssh_private_key_pem
-        from mindmemory_client.pnms_import import (
-            format_pnms_merge_error,
-            import_pnms_bundle_to_agent_checkpoint,
+        from mindmemory_client.memory_bundle import (
+            format_memory_engine_error,
+            import_encrypted_bundle_to_agent_checkpoint,
         )
+        from mindmemory_client.memory_errors import MemoryEngineError
         from mindmemory_client.register_crypto import k_seed_bytes_from_private_key_openssh
 
         dest = resolve_pnms_dir_for_user_agent(cfg, uid, agent)
         pem = read_openssh_private_key_pem(Path(cfg.private_key_path))
         key = k_seed_bytes_from_private_key_openssh(pem)
         try:
-            meta = import_pnms_bundle_to_agent_checkpoint(
+            meta = import_encrypted_bundle_to_agent_checkpoint(
                 bundle_path=bundle_path,
                 key=key,
                 dest_pnms_dir=dest,
@@ -829,18 +839,14 @@ def memory_merge(
                 user_uuid=uid,
                 agent_name=agent,
             )
-        except Exception as e:
-            try:
-                from pnms import PNMSError
-            except ImportError:
-                raise
-            if isinstance(e, PNMSError):
-                typer.echo(format_pnms_merge_error(e), err=True)
-                raise typer.Exit(1)
-            raise
-        typer.echo(f"已与 bundle 融合并保存 PNMS → {dest}（槽数量: {meta.get('num_slots')}）")
+        except MemoryEngineError as e:
+            typer.echo(format_memory_engine_error(e), err=True)
+            raise typer.Exit(1)
+        typer.echo(f"已与 bundle 融合并保存 checkpoint → {dest}（槽数量: {meta.get('num_slots')}）")
     else:
-        typer.echo("可执行 mmem memory import-bundle：解密并与本地 pnms 目录做 PNMS merge 后保存，再 mmem sync push。")
+        typer.echo(
+            "可执行 mmem memory import-bundle：经 mindmemory_client 合并 bundle 到本地 pnms/ 后再 mmem sync push。"
+        )
 
 
 @sync_app.command("ping")

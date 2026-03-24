@@ -1,16 +1,27 @@
-"""MindMemory 客户端库：PNMS + MMEM HTTP API。"""
+"""MindMemory 客户端库：记忆引擎（pnms 仅在后端模块导入）+ MMEM HTTP API。"""
 
 from mindmemory_client.api import MmemApiClient
 from mindmemory_client.config import DEFAULT_AGENT_NAME, MindMemoryClientConfig
 from mindmemory_client.errors import MindMemoryAPIError
 from mindmemory_client.keys import read_openssh_private_key_pem
+from mindmemory_client.memory_bundle import (
+    format_memory_engine_error,
+    import_encrypted_bundle_to_agent_checkpoint,
+)
 from mindmemory_client.memory_crypto import (
     decrypt_memory_base64,
     decrypt_memory_payload,
     encrypt_memory_base64,
     encrypt_memory_payload,
 )
-from mindmemory_client.pnms_bridge import PnmsMemoryBridge, resolve_pnms_data_dir
+from mindmemory_client.memory_errors import MemoryEngineError
+from mindmemory_client.memory_types import ChatTurnResult
+from mindmemory_client.pnms_bridge import (
+    PnmsMemoryBridge,
+    is_memory_engine_available,
+    peek_checkpoint_version_info,
+    resolve_pnms_data_dir,
+)
 from mindmemory_client.register_crypto import (
     encrypted_password_hex_from_private_key_openssh,
     key_fingerprint_from_public_key_ssh,
@@ -27,9 +38,15 @@ __all__ = [
     "MindMemoryClientConfig",
     "DEFAULT_AGENT_NAME",
     "MindMemoryAPIError",
+    "MemoryEngineError",
+    "ChatTurnResult",
     "MmemApiClient",
     "PnmsMemoryBridge",
+    "is_memory_engine_available",
+    "peek_checkpoint_version_info",
     "resolve_pnms_data_dir",
+    "import_encrypted_bundle_to_agent_checkpoint",
+    "format_memory_engine_error",
     "ChatMemorySession",
     "read_openssh_private_key_pem",
     "key_fingerprint_from_public_key_ssh",

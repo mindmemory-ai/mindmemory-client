@@ -1,6 +1,8 @@
 # mindmemory-client 与 `mmem` CLI 使用说明
 
-本文描述当前版本的 **Python 库** `mindmemory_client` 与命令行 **`mmem`** 的安装方式、环境变量、子命令及典型流程。架构与设计决策见 [mindmemory-client-设计.md](./mindmemory-client-设计.md)。
+本文描述当前版本的 **Python 库** `mindmemory_client` 与命令行 **`mmem`**（官方示例 CLI）的安装方式、环境变量、子命令及典型流程。架构与设计决策见 [mindmemory-client-设计.md](./mindmemory-client-设计.md)。
+
+**CLI 与 `pnms`：** `mmem` **不**直接 `import pnms`；对话、解密 bundle、合并与落盘一律通过 **`mindmemory_client`**（如 `PnmsMemoryBridge`、`memory_bundle.import_encrypted_bundle_to_agent_checkpoint`）。需安装同工作区 **`pnms`** 包，由库内 `pnms_bridge` 集中加载。
 
 ---
 
@@ -8,7 +10,7 @@
 
 | 能力 | 说明 |
 |------|------|
-| **PNMS** | 本地神经记忆引擎（需同工作区安装 `pnms`）。 |
+| **记忆引擎（PNMS）** | 本地神经记忆能力；依赖同工作区安装 `pnms`，仅由 `mindmemory_client.pnms_bridge` 等模块引用。 |
 | **MindMemory API** | 连接后端 `/api/v1`：`/health`、`/me`、`/agents`、同步签名接口 `begin-submit` / `mark-completed`。 |
 | **记忆加密** | 使用 **`K_seed = SHA256(OpenSSH 私钥 PEM)`** 的 32 字节作为 AES-256-GCM 密钥；与 `mindmemory/tools/gen_register_bundle.py` 及设计文档 §11 一致。 |
 | **同步产物** | `mmem sync push` 仅提交 **`pnms_bundle.enc`**（PNMS 数据目录打 tar.gz 后再 AES-GCM，Base64 单行写入仓库）。 |
@@ -90,7 +92,7 @@ mmem --help
 ### 3.4 多账户时的目录约定
 
 - **配置**：`$MMEM_CLIENT_CONFIG_DIR/state.json`（当前账户 UUID）、`accounts/<user_uuid>/account.json`（邮箱等）、`accounts/<user_uuid>/id_ed25519`（私钥）；默认 **`$MMEM_CLIENT_CONFIG_DIR` = `~/.mindmemory`**。  
-- **PNMS**：在未设置 `MMEM_PNMS_DATA_ROOT` 且通过 `resolve_mmem_config` 使用当前账户时，默认 **`$MMEM_CLIENT_DATA_DIR/pnms/<user_uuid>/<agent>/`**（默认 **`$MMEM_CLIENT_DATA_DIR` = `~/.mindmemory`**）。
+- **Checkpoint（原 PNMS 数据）**：在 **`mmem account login`** 且已 **`mmem agent init`** 的场景下，推荐路径为 **`$MMEM_CLIENT_DATA_DIR/accounts/<user_uuid>/agents/<agent>/pnms/`**（默认 **`$MMEM_CLIENT_DATA_DIR` = `~/.mindmemory`**）。`MMEM_PNMS_DATA_ROOT` 在配置对象中作为兼容字段存在，解析逻辑见 `resolve_mmem_config`。
 
 若曾使用旧版 `~/.config/mmem/` 或 `~/.cache/mmem/pnms/`，请自行迁移到 `~/.mindmemory/` 下对应结构，或继续用 `MMEM_CLIENT_CONFIG_DIR` / `MMEM_PNMS_DATA_ROOT` 指回旧路径。
 
@@ -117,13 +119,13 @@ export MMEM_PRIVATE_KEY_PATH=/path/to/private_key
 
 ```text
 mmem
-├── doctor              # 环境检查
+├── doctor              # 环境检查（含记忆引擎是否可被库加载）
 ├── models              # 列出 LLM profile
-├── chat                # 对话 + PNMS
-├── agent               # Agent 工作区：PNMS + 记忆 Git 仓库（clone）
+├── chat                # 对话（ChatMemorySession / PnmsMemoryBridge）
+├── agent               # Agent 工作区：checkpoint 目录 + 记忆 Git 仓库（clone）
 │   ├── init            # 服务端注册 Agent/仓、本地目录、git clone
 │   └── info            # 工作区 / pnms / repo 路径
-├── pnms                # 查看已保存的概念模块与记忆图（checkpoint）
+├── pnms                # 查看 checkpoint 目录（概念 meta、graph.db；读盘，不 import pnms）
 │   ├── status          # 目录 / meta / 边数摘要
 │   ├── concepts        # meta.json 与各 .pt
 │   └── graph           # graph.db 边（按权降序）
@@ -131,10 +133,11 @@ mmem
 ├── sync
 │   ├── encrypt-file    # 任意文件 → K_seed AES-GCM → Base64
 │   ├── decrypt-file    # 逆操作
-│   ├── push            # 打包 PNMS → pnms_bundle.enc → git + MMEM sync
+│   ├── push            # 打包 checkpoint → pnms_bundle.enc → git + MMEM sync
 │   └── ping            # GET /me、/agents
 └── memory
-    └── merge           # git fetch + pull --rebase（仅 Git 层）
+    ├── merge           # git fetch + pull --rebase；可选 --import-bundle
+    └── import-bundle   # 解密 pnms_bundle.enc → memory_bundle 合并并落盘
 ```
 
 查看帮助：
@@ -165,7 +168,7 @@ mmem agent --help
 
 ## 6. `mmem doctor`
 
-检查：Python 版本、能否导入 `pnms`、MindMemory `/health`（失败仅警告）、**客户端配置目录**与 **state 当前账户**、解析后的 **`user_uuid` / 私钥路径**、当前 LLM profile、**Ollama `/api/tags`**。  
+检查：Python 版本、**`mindmemory_client.pnms_bridge.is_memory_engine_available()`**（即 `pnms` 是否可被库加载）、MindMemory `/health`（失败仅警告）、**客户端配置目录**与 **state 当前账户**、解析后的 **`user_uuid` / 私钥路径**、当前 LLM profile、**Ollama `/api/tags`**。  
 `doctor` / `chat` / `sync` / `ping` 使用 **`resolve_mmem_config()`**（见 **`MMEM_CREDENTIAL_SOURCE`**，§3.1、§3.4）。  
 可选：`--base-url`、`--config`。
 
@@ -252,15 +255,31 @@ OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 AP
 
 ---
 
-## 11. `mmem memory merge`
+## 11. `mmem memory merge` / `mmem memory import-bundle`
 
-在**已配置 `origin`** 的仓库中执行：
+### 11.1 `mmem memory merge`
+
+在**已配置 `origin`** 的记忆仓库中执行：
 
 - `git fetch origin`
-- `git pull --rebase origin <schema>`（`--schema` 默认同 PNMS 记忆格式版本）
+- `git pull --rebase origin <schema>`（`--schema` 默认与 `resolve_memory_schema_version(None)` 一致）
 
-**`--dry-run`** 只打印将执行的命令。  
-**PNMS 语义合并**（槽/图/权重等）尚未在本库实现；合并后需自行处理远端 `pnms_bundle.enc` 与本地 PNMS 目录的一致性。
+**`--dry-run`** 只打印将执行的命令。
+
+**`--import-bundle`**：在上述 Git 步骤**成功**后，对 `<git-dir>/pnms_bundle.enc` 调用与 **`mmem memory import-bundle`** 相同的库流程（见 §11.2）。需要已配置私钥（`K_seed`）。
+
+### 11.2 `mmem memory import-bundle`
+
+不操作 Git，仅处理加密 bundle：
+
+1. 用 **`K_seed`** 解密 **`pnms_bundle.enc`** 为 tar.gz，解压到**系统临时目录**。
+2. 构造 **`PnmsMemoryBridge`**（checkpoint 为当前账户下 `accounts/<user_uuid>/agents/<agent>/pnms`）。
+3. 调用 **`merge_external_checkpoint`**（底层为已安装 `pnms` 的 `merge_memories`，语义以 `pnms` 文档为准）。
+4. **`persist_checkpoint`** 将当前内存态写入上述 `pnms/`。
+
+失败时库抛出 **`MemoryEngineError`**（CLI 会格式化为可读说明）。API 入口：**`mindmemory_client.memory_bundle.import_encrypted_bundle_to_agent_checkpoint`**；**`format_memory_engine_error`** 用于展示。
+
+**`--bundle`**：显式指定密文路径时可省略 **`--git-dir`**；否则默认 **`<git-dir>/pnms_bundle.enc`**（`git-dir` 可由 Agent 工作区自动解析）。
 
 ---
 
@@ -271,6 +290,11 @@ from mindmemory_client import (
     MmemApiClient,
     PnmsMemoryBridge,
     ChatMemorySession,
+    ChatTurnResult,
+    MemoryEngineError,
+    import_encrypted_bundle_to_agent_checkpoint,
+    format_memory_engine_error,
+    is_memory_engine_available,
     resolve_mmem_config,
     encrypt_memory_base64,
     decrypt_memory_base64,
@@ -281,7 +305,7 @@ with MmemApiClient(cfg) as api:
     api.health()
 ```
 
-更多模块：`register_crypto`、`memory_crypto`、`sync`（payload 签名）、`api` 等，见源码包 `src/mindmemory_client/`。
+更多模块：`memory_bundle`、`pnms_bridge`、`register_crypto`、`memory_crypto`、`sync`（payload 签名）、`api` 等，见源码包 `src/mindmemory_client/`。集成方应通过上述公开 API 使用记忆能力，**避免**在插件/业务代码中直接 `import pnms`（除非维护 `pnms` 本身）。
 
 ---
 

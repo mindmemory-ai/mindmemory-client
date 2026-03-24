@@ -13,7 +13,7 @@ from pnms import PNMS, PNMSConfig, SimpleQueryEncoder
 
 from mindmemory_client.config import MindMemoryClientConfig
 from mindmemory_client.memory_crypto import encrypt_memory_base64
-from mindmemory_client.pnms_import import import_pnms_bundle_to_agent_checkpoint
+from mindmemory_client.memory_bundle import import_encrypted_bundle_to_agent_checkpoint
 
 
 def test_import_bundle_roundtrip(tmp_path: Path) -> None:
@@ -40,7 +40,7 @@ def test_import_bundle_roundtrip(tmp_path: Path) -> None:
         pnms_data_root=tmp_path / "accounts",
         agent_name="A1",
     )
-    meta = import_pnms_bundle_to_agent_checkpoint(
+    meta = import_encrypted_bundle_to_agent_checkpoint(
         bundle_path=bundle,
         key=key,
         dest_pnms_dir=dest,

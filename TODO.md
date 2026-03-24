@@ -35,7 +35,8 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 - [x] **`mmem sync encrypt-file` / `decrypt-file`** — K_seed 加解密文件
 - [x] **`mmem sync push`** — 仅 **`pnms_bundle.enc`**（PNMS 目录 tar.gz + K_seed AES-GCM）；无 `--git-dir` 时只写本地 `./pnms_bundle.enc`
 - [x] **推送前**：`git fetch` + 与 `origin/<schema>` 比较；**behind/diverged** 时**不占锁**并退出（exit 2），提示先 **`mmem memory merge`**
-- [x] **`mmem memory merge`** — `git fetch` + `git pull --rebase origin <schema>`（`--dry-run`）；PNMS 语义合并占位，待 PNMS 实现
+- [x] **`mmem memory merge`** — `git fetch` + `git pull --rebase`；可选 `--import-bundle` → `import_encrypted_bundle_to_agent_checkpoint`
+- [x] **`mmem memory import-bundle`** — `memory_bundle` 解密合并落盘；CLI 不直接 import pnms
 - [x] **origin 校验**：默认要求 URL 含 Gogs 用户名片段（`--skip-remote-check` 可关）
 - [x] **`--pack-pnms`**：覆盖默认 PNMS 目录（默认 `MMEM_PNMS_DATA_ROOT/<user>/<agent>/`）
 

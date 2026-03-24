@@ -1,21 +1,18 @@
-"""单会话：一轮对话中 PNMS handle + 默认记忆摘要。"""
+"""单会话：一轮对话中记忆引擎 handle + 默认记忆摘要。"""
 
 from __future__ import annotations
 
 import logging
 from typing import Callable, Optional
 
-from pnms import HandleQueryResult
+from mindmemory_client.memory_types import ChatTurnResult
+from mindmemory_client.pnms_bridge import LLMReasoner, PnmsMemoryBridge
 
 logger = logging.getLogger(__name__)
 
-from mindmemory_client.pnms_bridge import PnmsMemoryBridge
-
-LLMReasoner = Callable[[str, str], str]
-
 
 class ChatMemorySession:
-    """将用户 query、LLM 回调与可选巩固文本交给 PNMS。"""
+    """将用户 query、LLM 回调与可选巩固文本交给记忆引擎。"""
 
     def __init__(
         self,
@@ -35,19 +32,18 @@ class ChatMemorySession:
         llm: LLMReasoner,
         content_to_remember: Optional[str] = None,
         system_prompt: Optional[str] = None,
-    ) -> HandleQueryResult:
+    ) -> ChatTurnResult:
         if content_to_remember is None:
             content_to_remember = f"[对话轮次] 用户：{query[:2000]}"
         sp = system_prompt if system_prompt is not None else self.system_prompt
         logger.info(
-            "PNMS turn user=%s query_chars=%d",
+            "chat turn user=%s query_chars=%d",
             self._bridge.user_id,
             len(query),
         )
-        return self._bridge.pnms.handle(
-            self._bridge.user_id,
+        return self._bridge.handle_chat_turn(
             query,
-            llm=llm,
+            llm,
             content_to_remember=content_to_remember,
             system_prompt=sp,
         )

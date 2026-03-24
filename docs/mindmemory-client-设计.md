@@ -126,20 +126,15 @@
 - `build_mark_completed_payload(user_uuid, agent_name, lock_uuid, commit_id, ts: int | None) -> str`
 - `sign_payload(payload: str, private_key) -> str`
 
-### 5.3 `mindmemory_client.pnms` — PNMS 托管封装
+### 5.3 `pnms_bridge` / `memory_bundle` — 记忆引擎托管（唯一直接依赖 `pnms` 的库层）
 
-职责：
+- **`mindmemory_client.pnms_bridge`**：集中 `import pnms`；提供 **`PnmsMemoryBridge`**（`user_id = f"{user_uuid}::{agent_name}"`、checkpoint 目录、`handle_chat_turn` → **`ChatTurnResult`**、`merge_external_checkpoint`、`persist_checkpoint` 等）。配套 **`is_memory_engine_available`**、**`peek_checkpoint_version_info`**。
+- **`mindmemory_client.memory_bundle`**：加密 **`pnms_bundle.enc`** 的解密、解压、合并与落盘；**`import_encrypted_bundle_to_agent_checkpoint`**、**`format_memory_engine_error`**；合并失败包装为 **`MemoryEngineError`**。
+- **`mindmemory_client.session`**：**`ChatMemorySession`** 仅依赖 bridge 与 **`ChatTurnResult`**，不暴露 pnms 类型。
 
-- 持有（或懒建）**全局 `PNMSConfig`** 与 **`PNMSClient`** 实例。
-- 为每个逻辑隔离单元（推荐：**同一 `user_uuid` 下的一个 `agent_name`**）分配：
-  - **PNMS `user_id` 字符串**：建议 `f"{user_uuid}::{agent_name}"` 或仅 `agent_name` 在单用户进程内（需在文档中固定一种，避免跨用户冲突）。
-  - **持久化目录**：`{pnms_data_root}/{safe_segment(user_uuid)}/{safe_segment(agent_name)}/`，其下存放 PNMS `save_concept_modules` 写入的 `meta.json` / `*.pt`、`graph.db`、`memory_slots.json`、`memory_session.pt`（概念、图边、记忆槽与个人状态 S_t）。
+持久化目录（与 Agent 工作区一致时）：**`accounts/<user_uuid>/agents/<agent>/pnms/`**，其下为引擎落盘的 `meta.json` / `*.pt`、`graph.db`、`memory_slots.json`、`memory_session.pt`。语义与 `pnms/docs/pnms_api.md` 对齐。
 
-对外暴露高层方法（与 `pnms/docs/pnms_api.md` 对齐）：
-
-- `handle_turn(user_id, query, llm, content_to_remember=..., system_prompt=...)` → `HandleQueryResult`
-- `get_context(user_id, query, system_prompt=..., use_concept=...)` → `ContextResult`
-- `save_checkpoint(user_id)`：对应引擎的 `save_concept_modules()`（在适当时机由调用方或本库钩子触发）。
+**配套 CLI（`mmem`）** 只 import **`mindmemory_client`**，**不** import **`pnms`**；作为库的示例程序存在。
 
 **不**在本层做：从 OpenClaw workspace 读文件；该部分属于插件。
 
@@ -152,17 +147,19 @@
 
 **不**在本层执行 `subprocess` 调用 git；仅保证 API 顺序与锁字段传递正确。
 
-### 5.5 CLI：`mmem sync push` / `mmem memory merge`（与 Git 协作）
+### 5.5 CLI：`mmem sync push` / `mmem memory merge` / `mmem memory import-bundle`（与 Git 协作）
 
-**仓库内唯一记忆载荷**：将 **PNMS 数据目录**（`{pnms_data_root}/{user}/{agent}/` 或 `--pack-pnms`）打成 **tar.gz** 后，用 **`K_seed`** 做 **AES-256-GCM**，得到 **`pnms_bundle.enc`** 提交到 Git。**不再**生成仅占位的 `mmem_payload.enc`。
+**仓库内唯一记忆载荷**：将 **checkpoint 目录**（`--pack-pnms` 或 Agent 工作区下 `pnms/`）打成 **tar.gz** 后，用 **`K_seed`** 做 **AES-256-GCM**，得到 **`pnms_bundle.enc`** 提交到 Git。**不再**生成仅占位的 `mmem_payload.enc`。
 
 **推送前（占锁之前）**：
 
-1. `git fetch origin`，比较本地 `HEAD` 与 `origin/<schema>`（`schema` 即 memory_schema_version 分支名，如 `v1`）。
-2. 若关系为 **behind**（远端较新）或 **diverged**（分叉）：**不调用** `begin-submit`，退出并提示用户先执行 **`mmem memory merge`**；PNMS **语义合并**（权重/图/槽）在库内**尚未实现**，合并命令当前仅做 **`git pull --rebase origin <schema>`**，后续由 PNMS 提供真正的合并后再接入同一命令或子步骤。
-3. 若为 **no_remote_branch**（首次推送）、**up_to_date** 或 **ahead**（本地有新提交可推）：再 **`begin-submit`** → 写入 `pnms_bundle.enc` → `commit` / `push` → **`mark-completed`**。
+1. `git fetch origin`，比较本地 `HEAD` 与 `origin/<schema>`（`schema` 即 memory_schema_version 分支名）。
+2. 若关系为 **behind** 或 **diverged**：**不调用** `begin-submit`，退出并提示用户先 **`mmem memory merge`**。
+3. 否则：**`begin-submit`** → 写入 `pnms_bundle.enc` → `commit` / `push` → **`mark-completed`**。
 
-**`mmem memory merge`**：仅对齐 **Git 历史**；用户需在本地自行协调解密后的 `pnms_bundle.enc` 与 PNMS 目录，或等待 PNMS 合并 API。
+**`mmem memory merge`**：默认仅 **`git pull --rebase`**。可选 **`--import-bundle`**：在 Git 成功后调用 **`import_encrypted_bundle_to_agent_checkpoint`**（见 **`memory_bundle`**）。
+
+**`mmem memory import-bundle`**：不操作 Git；解密 bundle → **`merge_external_checkpoint`** → **`persist_checkpoint`**。合并语义以已安装 **`pnms`** 的 `merge_memories` 为准。
 
 ---
 
@@ -179,7 +176,7 @@
 ### 6.2 PNMS 与 Agent 隔离
 
 - **云端**：MindMemory 以 `user_uuid` + `agent_name` 区分 Agent 与仓库。
-- **本地 PNMS**：必须为不同 `agent_name` 使用不同 `user_id` 或不同数据目录，避免槽/图串库；本库在 `pnms` 子模块中强制执行该约定。
+- **本地 checkpoint**：必须为不同 `agent_name` 使用不同 `user_id` 或不同数据目录，避免槽/图串库；本库在 **`pnms_bridge`** / Agent 工作区路径中强制执行该约定。
 
 ### 6.3 错误与重试策略（建议）
 
@@ -276,7 +273,8 @@ CLI 不改变该语义，只做**终端侧的胶水**：
 | `mmem chat --no-remote` | 仅本地 PNMS + LLM，不调用 MindMemory HTTP（调试 PNMS 与 prompt 拼接）。 |
 | `mmem sync status` | 调用 `GET /me`、`GET /agents`（需 Header），展示远端可见的 Agent 与锁无关的只读信息。 |
 | `mmem sync push` | 仅提交 **`pnms_bundle.enc`**；推送前 `fetch` 并比较远端，若落后/分叉则中止（不占锁）并提示 `mmem memory merge`。 |
-| `mmem memory merge` | `git fetch` + `git pull --rebase`；PNMS 语义合并未实现时由用户自行处理解密与目录协调。 |
+| `mmem memory merge` | `git fetch` + `git pull --rebase`；可选 `--import-bundle` 调用 `import_encrypted_bundle_to_agent_checkpoint`。 |
+| `mmem memory import-bundle` | 解密 `pnms_bundle.enc` → `merge_external_checkpoint` → 落盘；不操作 Git。 |
 
 **全局选项示例**：`--base-url`、`--user-uuid`、`--private-key-path`、`--agent`、`--pnms-root`。
 
