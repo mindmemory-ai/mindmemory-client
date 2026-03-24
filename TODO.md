@@ -83,7 +83,7 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 ### 测试与安全
 
 - [x] 单元测试：`tests/test_sync_manifest.py`、`tests/test_workspace_extras.py`
-- [ ] 集成测试（可选）：临时 git 仓库 smoke
+- [x] 集成测试（可选）：**`tests/test_integration_git_smoke.py`**（临时 `git init` + `mmem/bundles/extras.enc` commit + 解密回写）
 
 ### 宿主集成（库外，仅跟踪）
 
