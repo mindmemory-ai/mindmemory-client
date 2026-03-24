@@ -32,3 +32,8 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 mindmemory_client = ["agent/**/*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: 需 pnms+torch 的大型/慢速集成测试",
+]
