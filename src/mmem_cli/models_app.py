@@ -9,6 +9,7 @@ from typing import Literal, Optional, cast
 
 import typer
 
+from mindmemory_client.env_loader import get_env
 from mindmemory_client.llm_profiles import (
     LlmProfile,
     default_config_path,
@@ -81,7 +82,13 @@ def models_configure(
         "-u",
         help="Ollama 根 URL（无路径，如 https://ollama.com 或 http://127.0.0.1:11434）；local 默认本机",
     ),
-    model: str = typer.Option(..., "--model", "-M", help="模型名，与 ollama list / tags 一致"),
+    model: Optional[str] = typer.Option(
+        None,
+        "--model",
+        "-M",
+        help="模型名；省略则用 MMEM_OLLAMA_MODEL 或内置默认 llama3.2",
+        envvar="MMEM_OLLAMA_MODEL",
+    ),
     api_token: Optional[str] = typer.Option(
         None,
         "--api-token",
@@ -98,6 +105,11 @@ def models_configure(
     config_path: Optional[Path] = typer.Option(None, "--config", envvar="MMEM_CONFIG_PATH"),
 ) -> None:
     """写入或更新 ``~/.mindmemory/config.toml`` 中的单个 profile。"""
+    model_name = (model or get_env("MMEM_OLLAMA_MODEL") or LlmProfile().ollama_model).strip()
+    if not model_name:
+        typer.echo("请指定 --model 或设置环境变量 MMEM_OLLAMA_MODEL。", err=True)
+        raise typer.Exit(1)
+
     if target not in ("local", "remote"):
         typer.echo("--target 须为 local 或 remote", err=True)
         raise typer.Exit(1)
@@ -132,7 +144,7 @@ def models_configure(
         backend="ollama",
         target=cast(Literal["local", "remote"], target),
         ollama_base_url=base_url,
-        ollama_model=model.strip(),
+        ollama_model=model_name,
         api_token=tok,
         timeout_s=timeout_s,
     )

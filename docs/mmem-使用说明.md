@@ -60,7 +60,7 @@ mmem --help
 | `MMEM_PNMS_DATA_ROOT` | PNMS 根目录（`from_env`；account 模式下解析后可能被账户逻辑覆盖） | `~/.mindmemory/pnms` |
 | `MMEM_TIMEOUT_S` | HTTP 超时（秒） | `60` |
 | `MMEM_CONFIG_PATH` | 覆盖 `~/.mindmemory/config.toml` | 内置路径 |
-| `MMEM_LLM_PROFILE` / `MMEM_OLLAMA_URL` / `MMEM_OLLAMA_MODEL` | LLM 覆盖 | 见 `config.toml` |
+| `MMEM_LLM_PROFILE` / `MMEM_OLLAMA_URL` / `MMEM_OLLAMA_MODEL` / `MMEM_OLLAMA_API_TOKEN` | LLM 覆盖 | 见 `config.toml` |
 | `MMEM_CLIENT_CONFIG_DIR` / `MMEM_CLIENT_DATA_DIR` | 客户端主目录（默认均为 **`~/.mindmemory`**；可设 `MMEM_CLIENT_DATA_DIR` 单独把 PNMS 放别处） | `~/.mindmemory` |
 | `MMEM_ENV_FILE` | 仅加载该 `.env`（由 `env_loader` 读，须在首次加载前由 shell 设置） | 未设置 |
 | `MMEM_SKIP_DOTENV` | `1` 时不读 `.env`（pytest） | 未设置 |
@@ -233,7 +233,7 @@ OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 AP
 | 选项 | 说明 |
 |------|------|
 | `--agent` | Agent 名（必填） |
-| `--schema` | 与 `memory_schema_version` 一致，即 `git push` 的目标分支名（默认 `v1`） |
+| `--schema` | 与 `memory_schema_version` 一致，即 `git push` 的目标分支名；**默认**与 PNMS `get_memory_format_version()` 相同（如 `1.0.0`） |
 | `--git-dir` | 已配置 **`origin`** 的本地记忆仓库；省略时若已 **`mmem agent init`** 则使用 `.../agents/<agent>/repo/` |
 | `--pack-pnms` | 指定 PNMS 目录；不指定时使用 **`mmem agent init`** 后的 `.../agents/<agent>/pnms/` 或 `MMEM_PNMS_DATA_ROOT/<user>/<agent>/` |
 | `--skip-remote-check` | 不校验 `origin` URL |
@@ -257,7 +257,7 @@ OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 AP
 在**已配置 `origin`** 的仓库中执行：
 
 - `git fetch origin`
-- `git pull --rebase origin <schema>`（`--schema` 默认 `v1`）
+- `git pull --rebase origin <schema>`（`--schema` 默认同 PNMS 记忆格式版本）
 
 **`--dry-run`** 只打印将执行的命令。  
 **PNMS 语义合并**（槽/图/权重等）尚未在本库实现；合并后需自行处理远端 `pnms_bundle.enc` 与本地 PNMS 目录的一致性。
