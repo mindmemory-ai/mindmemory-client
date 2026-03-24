@@ -211,6 +211,8 @@ OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 AP
 | `--config` | `config.toml` 路径 |
 | `--no-workspace-prompt` | 不读取 **`workspace/mmem-workspace.json`** 的 **`prompt`** 段（仅 PNMS 默认系统提示）；也可用 **`MMEM_CHAT_NO_WORKSPACE_PROMPT=1`** |
 | `--quiet` / `-q` | 不打印工作区状态行（启动时仍会做日志） |
+| `--prompt-dump <文件>` | 每轮将实际发给 LLM 的提示写入该路径（**Ollama**：`[role: system]` / `[role: user]`；**mock/echo**：`query` + 传入 LLM 的 `context`）；便于调试 |
+| `--prompt-dump-append` | 与 `--prompt-dump` 联用：多轮**追加**（默认每轮**覆盖**整文件） |
 
 **需先** `mmem account login`（或配置 `MMEM_CREDENTIAL_SOURCE=env` 与私钥）；未登录无法使用对话。PNMS 目录为 `accounts/<user_uuid>/agents/<agent>/pnms`。
 

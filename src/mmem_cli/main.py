@@ -23,7 +23,7 @@ from mindmemory_client.config import MindMemoryClientConfig
 from mindmemory_client.errors import MindMemoryAPIError
 from mindmemory_client.llm_profiles import default_config_path, effective_ollama_url, load_llm_profiles_from_toml, resolve_profile
 from mindmemory_client.memory_schema import resolve_memory_schema_version
-from mindmemory_client.ollama_llm import build_ollama_llm, ollama_health
+from mindmemory_client.ollama_llm import build_ollama_llm, ollama_health, write_prompt_dump_file
 
 from mmem_cli.account import account_app
 from mmem_cli.agent_app import agent_app
@@ -61,13 +61,32 @@ def _llm_echo():
 def _wrap_llm_workspace_prefix(
     llm: Callable[[str, str], str],
     workspace_text: str | None,
+    *,
+    prompt_dump_path: Path | None = None,
+    prompt_dump_append: bool = False,
 ) -> Callable[[str, str], str]:
     """mock/echo 无独立 system 通道时，将工作区正文前缀到 PNMS ``context``。"""
-    if not workspace_text:
-        return llm
-
     def wrapped(q: str, ctx: str) -> str:
-        return llm(q, f"[Workspace]\n{workspace_text}\n\n---\n\n{ctx}")
+        if workspace_text:
+            ctx2 = f"[Workspace]\n{workspace_text}\n\n---\n\n{ctx}"
+        else:
+            ctx2 = ctx
+        if prompt_dump_path is not None:
+            try:
+                dump_text = (
+                    "# mmem chat (mock/echo)\n\n"
+                    "[query]\n"
+                    + q
+                    + "\n\n[context passed to llm]\n"
+                    + ctx2
+                    + "\n"
+                )
+                write_prompt_dump_file(
+                    prompt_dump_path, dump_text, append=prompt_dump_append
+                )
+            except OSError as e:
+                logger.warning("prompt dump write failed: %s", e)
+        return llm(q, ctx2)
 
     return wrapped
 
@@ -105,11 +124,23 @@ def _build_llm_callback(
     *,
     workspace_text: str | None = None,
     chat_lang: str = "zh",
+    prompt_dump_path: Optional[Path] = None,
+    prompt_dump_append: bool = False,
 ):
     if llm_mode == "mock":
-        return _wrap_llm_workspace_prefix(_llm_mock(), workspace_text)
+        return _wrap_llm_workspace_prefix(
+            _llm_mock(),
+            workspace_text,
+            prompt_dump_path=prompt_dump_path,
+            prompt_dump_append=prompt_dump_append,
+        )
     if llm_mode == "echo":
-        return _wrap_llm_workspace_prefix(_llm_echo(), workspace_text)
+        return _wrap_llm_workspace_prefix(
+            _llm_echo(),
+            workspace_text,
+            prompt_dump_path=prompt_dump_path,
+            prompt_dump_append=prompt_dump_append,
+        )
 
     llm_cfg = load_llm_profiles_from_toml(config_path)
     prof = resolve_profile(
@@ -119,7 +150,13 @@ def _build_llm_callback(
         ollama_model_override=model,
     )
     wb = workspace_text.strip() if workspace_text else None
-    return build_ollama_llm(prof, workspace_block=wb, lang=chat_lang)
+    return build_ollama_llm(
+        prof,
+        workspace_block=wb,
+        lang=chat_lang,
+        dump_prompt_path=prompt_dump_path,
+        dump_append=prompt_dump_append,
+    )
 
 
 @app.command()
@@ -248,6 +285,16 @@ def chat(
         "-q",
         help="不打印工作区加载状态行",
     ),
+    prompt_dump: Optional[Path] = typer.Option(
+        None,
+        "--prompt-dump",
+        help="每轮将发给 LLM 的提示（Ollama: system+user；mock/echo: query+context）写入该文件，便于调试",
+    ),
+    prompt_dump_append: bool = typer.Option(
+        False,
+        "--prompt-dump-append",
+        help="与 --prompt-dump 联用：追加多轮内容（默认每轮覆盖整文件）",
+    ),
 ) -> None:
     """交互对话或 -m 单次；每轮经 ``ChatMemorySession`` / ``PnmsMemoryBridge`` 更新记忆并落盘。默认走本地 Ollama。"""
     try:
@@ -302,6 +349,8 @@ def chat(
         config_path,
         workspace_text=ws_block if not skip_ws else None,
         chat_lang=chat_lang,
+        prompt_dump_path=prompt_dump,
+        prompt_dump_append=prompt_dump_append,
     )
     logger.info("mmem chat agent=%s llm_mode=%s user=%s", agent, llm_mode, uid)
 

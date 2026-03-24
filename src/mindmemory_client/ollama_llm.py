@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Callable
 
 import httpx
@@ -11,6 +12,17 @@ from mindmemory_client.chat_strings import chat_strings
 from mindmemory_client.llm_profiles import LlmProfile, effective_ollama_url
 
 logger = logging.getLogger(__name__)
+
+
+def write_prompt_dump_file(path: Path, text: str, *, append: bool) -> None:
+    path = path.expanduser().resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    need_sep = append and path.is_file() and path.stat().st_size > 0
+    mode = "a" if append else "w"
+    with path.open(mode, encoding="utf-8") as f:
+        if need_sep:
+            f.write("\n\n" + "=" * 72 + "\n\n")
+        f.write(text)
 
 
 def _ollama_headers(profile: LlmProfile) -> dict[str, str]:
@@ -36,6 +48,8 @@ def build_ollama_llm(
     workspace_block: str | None = None,
     *,
     lang: str = "zh",
+    dump_prompt_path: Path | None = None,
+    dump_append: bool = False,
 ) -> Callable[[str, str], str]:
     """
     构造 ``(query, context) -> response``；向 Ollama 发送 **system**（说明 + 可选工作区人格）与 **user**（PNMS 上下文 + 问题）。
@@ -59,6 +73,18 @@ def build_ollama_llm(
             + str(s["ollama_user_memory_suffix"])
             + query
         )
+        if dump_prompt_path is not None:
+            try:
+                dump_text = (
+                    "[role: system]\n"
+                    + system_content
+                    + "\n\n[role: user]\n"
+                    + user_content
+                    + "\n"
+                )
+                write_prompt_dump_file(dump_prompt_path, dump_text, append=dump_append)
+            except OSError as e:
+                logger.warning("prompt dump write failed: %s", e)
         logger.debug(
             "Ollama request model=%s base=%s query_chars=%d context_chars=%d auth=%s",
             profile.ollama_model,
