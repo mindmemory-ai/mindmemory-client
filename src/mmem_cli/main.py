@@ -9,11 +9,12 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import subprocess
 import sys
 import tarfile
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import typer
 
@@ -38,6 +39,11 @@ app = typer.Typer(
 )
 
 
+def _env_truthy(name: str) -> bool:
+    v = (os.environ.get(name) or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def _llm_mock():
     def llm(q: str, ctx: str) -> str:
         return f"[mock] 已收到。context 长度={len(ctx)}，query 预览={q[:120]!r}"
@@ -52,17 +58,58 @@ def _llm_echo():
     return llm
 
 
+def _wrap_llm_workspace_prefix(
+    llm: Callable[[str, str], str],
+    workspace_text: str | None,
+) -> Callable[[str, str], str]:
+    """mock/echo 无独立 system 通道时，将工作区正文前缀到 PNMS ``context``。"""
+    if not workspace_text:
+        return llm
+
+    def wrapped(q: str, ctx: str) -> str:
+        return llm(q, f"[Workspace]\n{workspace_text}\n\n---\n\n{ctx}")
+
+    return wrapped
+
+
+def _emit_workspace_chat_status(
+    ws_dir: Path,
+    skip: bool,
+    ws_block: str | None,
+    ws_warns: list[str],
+    strs: dict,
+) -> None:
+    from mindmemory_client.sync_manifest import resolve_workspace_config_path
+
+    if skip:
+        typer.echo(strs["status_workspace_skipped"])
+        return
+    mp = resolve_workspace_config_path(ws_dir)
+    if not mp or not mp.is_file():
+        typer.echo(strs["status_workspace_missing"])
+        return
+    if ws_warns:
+        typer.echo(strs["status_workspace_errors"].format(details="; ".join(ws_warns)), err=True)
+    if ws_block:
+        typer.echo(strs["status_workspace_loaded"])
+    else:
+        typer.echo(strs["status_workspace_no_prompt"])
+
+
 def _build_llm_callback(
     llm_mode: str,
     profile: str,
     ollama_url: Optional[str],
     model: Optional[str],
     config_path: Optional[Path],
+    *,
+    workspace_text: str | None = None,
+    chat_lang: str = "zh",
 ):
     if llm_mode == "mock":
-        return _llm_mock()
+        return _wrap_llm_workspace_prefix(_llm_mock(), workspace_text)
     if llm_mode == "echo":
-        return _llm_echo()
+        return _wrap_llm_workspace_prefix(_llm_echo(), workspace_text)
 
     llm_cfg = load_llm_profiles_from_toml(config_path)
     prof = resolve_profile(
@@ -71,7 +118,8 @@ def _build_llm_callback(
         ollama_url_override=ollama_url,
         ollama_model_override=model,
     )
-    return build_ollama_llm(prof)
+    wb = workspace_text.strip() if workspace_text else None
+    return build_ollama_llm(prof, workspace_block=wb, lang=chat_lang)
 
 
 @app.command()
@@ -189,6 +237,17 @@ def chat(
     config_path: Optional[Path] = typer.Option(None, "--config", envvar="MMEM_CONFIG_PATH"),
     no_remote: bool = typer.Option(False, "--no-remote", help="不请求 MindMemory HTTP"),
     base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
+    no_workspace_prompt: bool = typer.Option(
+        False,
+        "--no-workspace-prompt",
+        help="不读取 workspace/mmem-workspace.json 的 prompt（纯 PNMS 默认系统提示）；也可用 MMEM_CHAT_NO_WORKSPACE_PROMPT=1",
+    ),
+    quiet: bool = typer.Option(
+        False,
+        "--quiet",
+        "-q",
+        help="不打印工作区加载状态行",
+    ),
 ) -> None:
     """交互对话或 -m 单次；每轮经 ``ChatMemorySession`` / ``PnmsMemoryBridge`` 更新记忆并落盘。默认走本地 Ollama。"""
     try:
@@ -209,7 +268,12 @@ def chat(
         resolve_workspace_dir_for_user_agent,
         seed_default_workspace_template,
     )
+    from mindmemory_client.chat_strings import chat_strings, get_chat_lang
     from mindmemory_client.workspace_prompt import read_workspace_prompt_block
+
+    chat_lang = get_chat_lang()
+    strs = chat_strings(chat_lang)
+    skip_ws = no_workspace_prompt or _env_truthy("MMEM_CHAT_NO_WORKSPACE_PROMPT")
 
     try:
         seed_default_workspace_template(uid, agent)
@@ -217,21 +281,28 @@ def chat(
         logger.debug("seed_default_workspace_template: %s", e)
 
     ws_dir = resolve_workspace_dir_for_user_agent(uid, agent)
-    ws_block, ws_warns = read_workspace_prompt_block(ws_dir)
-    for w in ws_warns:
-        logger.warning("workspace prompt: %s", w)
+    if skip_ws:
+        ws_block, ws_warns = None, []
+    else:
+        ws_block, ws_warns = read_workspace_prompt_block(ws_dir)
+        for w in ws_warns:
+            logger.warning("workspace prompt: %s", w)
+
+    if not quiet:
+        _emit_workspace_chat_status(ws_dir, skip_ws, ws_block, ws_warns, strs)
 
     pnms_ckpt = resolve_pnms_dir_for_user_agent(cfg, uid, agent)
     bridge = PnmsMemoryBridge(cfg.pnms_data_root, uid, agent, checkpoint_dir=pnms_ckpt)
-    base_sp = "你是个人助手，请严格依据记忆回答。"
-    if ws_block:
-        base_sp = (
-            base_sp
-            + "\n\n以下工作区设定来自 workspace/mmem-workspace.json（prompt），请在不与安全/事实冲突的前提下融入语气与身份：\n\n"
-            + ws_block
-        )
-    session = ChatMemorySession(bridge, system_prompt=base_sp)
-    llm_fn = _build_llm_callback(llm_mode, profile, ollama_url, model, config_path)
+    session = ChatMemorySession(bridge, system_prompt=str(strs["session_system_default"]))
+    llm_fn = _build_llm_callback(
+        llm_mode,
+        profile,
+        ollama_url,
+        model,
+        config_path,
+        workspace_text=ws_block if not skip_ws else None,
+        chat_lang=chat_lang,
+    )
     logger.info("mmem chat agent=%s llm_mode=%s user=%s", agent, llm_mode, uid)
 
     if llm_mode == "ollama":

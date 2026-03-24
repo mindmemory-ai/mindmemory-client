@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 import httpx
 
+from mindmemory_client.chat_strings import chat_strings
 from mindmemory_client.llm_profiles import LlmProfile, effective_ollama_url
 
 logger = logging.getLogger(__name__)
@@ -30,15 +31,33 @@ def _ollama_error_detail(resp: httpx.Response) -> str:
     return t[:400] if t else f"HTTP {resp.status_code} 无响应体"
 
 
-def build_ollama_llm(profile: LlmProfile) -> Callable[[str, str], str]:
+def build_ollama_llm(
+    profile: LlmProfile,
+    workspace_block: str | None = None,
+    *,
+    lang: str = "zh",
+) -> Callable[[str, str], str]:
+    """
+    构造 ``(query, context) -> response``；向 Ollama 发送 **system**（说明 + 可选工作区人格）与 **user**（PNMS 上下文 + 问题）。
+
+    ``context`` 为 PNMS ``context_builder`` 输出（已含简短 ``system_prompt``）；``workspace_block`` 单独进入 **system**，避免与记忆检索串挤在同一条 user 里。
+    """
     base = effective_ollama_url(profile).rstrip("/")
     headers = _ollama_headers(profile)
     client = httpx.Client(timeout=profile.timeout_s, headers=headers)
+    s = chat_strings(lang)
+    system_intro = str(s["ollama_system_intro"])
+    if workspace_block and workspace_block.strip():
+        system_content = system_intro + "\n\n---\n\n" + workspace_block.strip()
+    else:
+        system_content = system_intro
 
     def llm(query: str, context: str) -> str:
-        # PNMS 传入的 context 已含系统与记忆；再拼用户问题
         user_content = (
-            f"以下是与记忆相关的上下文：\n{context}\n\n请根据上下文回答。\n用户问题：{query}"
+            str(s["ollama_user_memory_prefix"])
+            + context
+            + str(s["ollama_user_memory_suffix"])
+            + query
         )
         logger.debug(
             "Ollama request model=%s base=%s query_chars=%d context_chars=%d auth=%s",
@@ -50,7 +69,10 @@ def build_ollama_llm(profile: LlmProfile) -> Callable[[str, str], str]:
         )
         body_chat: dict[str, Any] = {
             "model": profile.ollama_model,
-            "messages": [{"role": "user", "content": user_content}],
+            "messages": [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_content},
+            ],
             "stream": False,
         }
         r = client.post(f"{base}/api/chat", json=body_chat)
@@ -66,9 +88,10 @@ def build_ollama_llm(profile: LlmProfile) -> Callable[[str, str], str]:
             r.raise_for_status()
 
         # /api/chat 返回 404：多为旧版无 Chat API；也可能是模型不存在（/api/generate 会同样失败）
+        prompt_legacy = f"[System]\n{system_content}\n\n[User]\n{user_content}"
         body_gen: dict[str, Any] = {
             "model": profile.ollama_model,
-            "prompt": user_content,
+            "prompt": prompt_legacy,
             "stream": False,
         }
         r2 = client.post(f"{base}/api/generate", json=body_gen)

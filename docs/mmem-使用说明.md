@@ -67,6 +67,8 @@ mmem --help
 | `MMEM_ENV_FILE` | 仅加载该 `.env`（由 `env_loader` 读，须在首次加载前由 shell 设置） | 未设置 |
 | `MMEM_SKIP_DOTENV` | `1` 时不读 `.env`（pytest） | 未设置 |
 | `MMEM_LOG_LEVEL` | `mmem` 客户端日志级别：`DEBUG` / `INFO` / `WARNING` / `ERROR` | `INFO` |
+| `MMEM_LANG` | `mmem chat` 文案语言：`zh` / `en`（与 `LANG` 环境变量互参，未设时优先中文） | 依 `LANG` |
+| `MMEM_CHAT_NO_WORKSPACE_PROMPT` | 设为 `1` / `true` 时等价于 **`mmem chat --no-workspace-prompt`**（不读 `mmem-workspace.json` 的 `prompt`） | 未设置 |
 | `MMEM_LOG_FILE` | 可选，日志文件路径（额外写入；未设置则仅 stderr） | 未设置 |
 | `MMEM_LOG_FORMAT` | 可选，`logging` 格式串（覆盖默认时间+级别+logger+消息） | 内置默认 |
 | `MMEM_GIT_SSH_HOST` | Gogs SSH 主机名（`mmem agent init` clone 用） | 未设置 |
@@ -207,10 +209,20 @@ OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 AP
 | `--ollama-url` / `--model` | 覆盖当前 profile |
 | `--no-remote` | 不请求 MindMemory `/health` |
 | `--config` | `config.toml` 路径 |
+| `--no-workspace-prompt` | 不读取 **`workspace/mmem-workspace.json`** 的 **`prompt`** 段（仅 PNMS 默认系统提示）；也可用 **`MMEM_CHAT_NO_WORKSPACE_PROMPT=1`** |
+| `--quiet` / `-q` | 不打印工作区状态行（启动时仍会做日志） |
 
 **需先** `mmem account login`（或配置 `MMEM_CREDENTIAL_SOURCE=env` 与私钥）；未登录无法使用对话。PNMS 目录为 `accounts/<user_uuid>/agents/<agent>/pnms`。
 
-### 9.1 `mmem pnms`（概念图与记忆图）
+### 9.1 工作区提示与语言
+
+- **默认 Agent `BT-7274`**：首次在 `workspace/` 下无 **`mmem-workspace.json`** 时，会从包内模板复制 **`identity.md`**、**`soul.md`** 与配置（见 **`mindmemory_client.agent.BT-7274.workspace`**）。
+- **其他 Agent 名**：无内置模板时，请自行在 **`workspace/mmem-workspace.json`** 中配置 **`sync`** / **`prompt`**，或从 **`agent/BT-7274/workspace/`**（仓库根镜像，与包内一致）复制后改文件名与 `include`。
+- **Ollama**：工作区 **`prompt`** 正文作为 **`/api/chat`** 的 **system** 消息（与 PNMS 检索出的 **user** 消息分离）；`mock` / `echo` 则将工作区正文前缀到 PNMS 上下文字符串前，便于离线对照。
+- **文案语言**：**`MMEM_LANG=zh|en`**，或 **`LANG`** 以 `zh` / `en` 开头时推断；影响 **启动状态行**、**默认系统提示**、**Ollama 包装句**。
+- **仓库镜像校验**：在仓库根执行 **`python tools/check_agent_workspace_mirror.py`**，确认 **`src/mindmemory_client/agent/BT-7274/workspace/`** 与 **`agent/BT-7274/workspace/`** 文件一致（CI 可复用）。
+
+### 9.2 `mmem pnms`（概念图与记忆图）
 
 查看当前 **user + agent** 对应 checkpoint 目录下**已落盘**的内容：**概念模块**（`meta.json`、各 `*.pt`）与**记忆图**（SQLite `graph.db`）。子命令：`status`（摘要）、`concepts`（meta 与文件列表）、`graph`（按边权列出前 N 条边，`--limit`）。共用 `--agent`、`--user`（覆盖 `user_uuid`）、`--json`。
 

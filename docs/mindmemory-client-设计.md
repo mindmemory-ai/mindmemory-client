@@ -305,19 +305,16 @@ CLI 将 **PNMS 给出的 `context`** 与用户 **query** 拼入 Ollama 的 user 
 | **`sync.bundles`** | 打进 **`extras.enc`**、随记忆 Git 同步的明文子集。 |
 | **`prompt`** | 供 **`mmem chat`**（及宿主）在**本机**拼装 LLM 系统侧上下文的文件列表；**不**加密、**不**因未列入 `sync` 而自动进仓。 |
 
-**Ollama 请求形态（已知局限）**：实现上将「PNMS 返回的 `context` + 用户问题」合成**一条 `role: user` 消息**（见 **`ollama_llm.build_ollama_llm`**）。后续可评估改为 **`system` + `user`** 分栏，以改善部分模型对指令的遵循。
+**Ollama 请求形态（当前）**：**`build_ollama_llm`** 发送 **`messages`**：**`system`** = 说明文案 + 可选 **`workspace` prompt 块**；**`user`** = 本地化前缀 + PNMS `context` + 后缀 + 用户 `query`。回退 **`/api/generate`** 时将两段合并为单条 `prompt`。文案语言由 **`MMEM_LANG`** / **`LANG`** 与 **`chat_strings`** 表驱动。
 
 **模板与仓库布局**：
 
 - **打包源**：**`src/mindmemory_client/agent/BT-7274/workspace/`**（随 **`pyproject.toml`** `package-data` 安装）。
 - 仓库根 **`agent/BT-7274/workspace/`** 若存在，为便于阅读/拷贝的**镜像**，**以包内路径为准**；避免只改一侧导致漂移。
 
-**建议后续（本仓库 TODO 跟踪）**：
+**已实现**：**`--no-workspace-prompt`**、**`MMEM_CHAT_NO_WORKSPACE_PROMPT`**、**`-q` / `--quiet`**、启动时终端状态行、**`chat_strings`（zh/en）**、Ollama **system/user** 分栏、**`tools/check_agent_workspace_mirror.py`**。详见 **`docs/mmem-使用说明.md`** §9.1。
 
-- **`mmem chat --no-workspace-prompt`**（或环境变量）以对照「纯 PNMS、无工作区人格」行为。
-- **`--verbose` / 启动提示**：简要提示是否已加载 workspace 提示块（解析失败时可见告警，而非仅日志）。
-- **文案与 i18n**：默认系统提示与 Ollama 包装句为中文硬编码；可抽常量或配置，便于英文与多语言。
-- **非默认 Agent**：无包内模板时需**自建** `mmem-workspace.json` 或从 BT-7274 目录复制后改名。
+**仍可演进**：更多语言、将状态行与 **`mmem doctor`** 的 i18n 统一、以及宿主侧 extras 解密与 PNMS 的拼接策略。
 
 ### 10.6 与「自有客户端」产品线的关系
 

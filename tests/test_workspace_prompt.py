@@ -1,5 +1,7 @@
 """workspace 提示拼装与 BT-7274 内置模板。"""
 
+import subprocess
+import sys
 from importlib.resources import files
 from pathlib import Path
 
@@ -42,3 +44,15 @@ def test_seed_default_workspace_template(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert (ws / "soul.md").is_file()
     ok2 = aw.seed_default_workspace_template(uid, "BT-7274")
     assert not ok2
+
+
+def test_agent_workspace_mirror_script_ok() -> None:
+    root = Path(__file__).resolve().parents[1]
+    script = root / "tools" / "check_agent_workspace_mirror.py"
+    r = subprocess.run(
+        [sys.executable, str(script)],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, r.stderr + r.stdout

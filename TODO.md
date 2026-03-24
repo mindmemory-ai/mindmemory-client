@@ -32,7 +32,7 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 ## CLI `mmem`
 
 - [x] `mmem doctor` — 依赖、MindMemory、Ollama（`/api/tags`）
-- [x] `mmem chat` — 默认 `--llm ollama`；`--profile` / `-p`；`--ollama-url`、`--model`；`mock`/`echo`；`--no-remote`；**`workspace/mmem-workspace.json`** 的 **`prompt`** 拼入 **`system_prompt`**（见 **`read_workspace_prompt_block`**）
+- [x] `mmem chat` — 默认 `--llm ollama`；`--profile` / `-p`；`--ollama-url`、`--model`；`mock`/`echo`；`--no-remote`；**`--no-workspace-prompt`** / **`MMEM_CHAT_NO_WORKSPACE_PROMPT`**；**`-q`**；**`prompt`** → Ollama **system**（见 **`chat_strings`**、**`ollama_llm.build_ollama_llm`**）
 - [x] `mmem models` — 列出已加载 profile
 - [x] **`mmem sync encrypt-file` / `decrypt-file`** — K_seed 加解密文件
 - [x] **`mmem sync push`** — **`pnms_bundle.enc`**（PNMS tar.gz + K_seed）；可选 **`--sync-extras`** 生成 **`mmem/bundles/extras.enc`**；无 `--git-dir` 时只写本地 **`./pnms_bundle.enc`**
@@ -93,12 +93,12 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 
 ### CLI / workspace 演进（设计见 `docs/mindmemory-client-设计.md` §10.5.1、`memory-repo-extended-layout.md` §3.2a）
 
-- [ ] **`mmem chat --no-workspace-prompt`**（或 **`MMEM_CHAT_NO_WORKSPACE_PROMPT=1`**）：跳过 **`read_workspace_prompt_block`**，便于对照纯 PNMS 行为
-- [ ] **启动可观测性**：在终端简要提示「已加载 / 未找到 / 解析失败」workspace 提示（除 logger 外）
-- [ ] **Ollama**：评估将 PNMS `context` 与 **工作区 system 段**拆为 **`system` + `user` 消息**，替代单条 user 拼接（见 **`ollama_llm.build_ollama_llm`**）
-- [ ] **文案 i18n**：默认系统提示与 Ollama 包装句抽常量或配置，支持英文等
-- [ ] **模板单一来源**：CI 或脚本校验 **`src/mindmemory_client/agent/BT-7274/workspace/`** 与仓库根 **`agent/BT-7274/workspace/`** 一致（若保留镜像）
-- [ ] **文档**：非 BT-7274 Agent 如何复制模板、维护 **`mmem-workspace.json`**（`mmem-使用说明` 小节）
+- [x] **`mmem chat --no-workspace-prompt`**（或 **`MMEM_CHAT_NO_WORKSPACE_PROMPT=1`**）：跳过 **`read_workspace_prompt_block`**
+- [x] **启动可观测性**：终端状态行（`--quiet` 关闭）；解析失败等写入 **`warnings`** 并 **`typer.echo(..., err=True)`**
+- [x] **Ollama**：**`system`** + **`user`**（`build_ollama_llm`）；**`session_system_default`** 仅短句，工作区人格不重复塞进 PNMS `system_prompt`
+- [x] **文案 i18n**：**`mindmemory_client/chat_strings.py`**（**`MMEM_LANG`** / **`LANG`**，`zh`/`en`）
+- [x] **模板镜像**：**`tools/check_agent_workspace_mirror.py`** + **`tests/test_workspace_prompt.py`** 中调用
+- [x] **文档**：**`docs/mmem-使用说明.md`** §9.1（非 BT-7274、镜像校验、语言）
 
 ### 宿主集成（本仓库不实现，供 OpenClaw / 自研插件跟踪）
 
