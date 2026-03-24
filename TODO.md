@@ -2,6 +2,8 @@
 
 依据 [docs/mindmemory-client-设计.md](docs/mindmemory-client-设计.md)。完成一项则勾选并提交 git。
 
+**摘要**：库与 **`mmem`** CLI 已覆盖 PNMS、MMEM API、**`workspace/` + extras 密文**（清单、打包、解密、`sync push --sync-extras`、`memory` 侧 `--import-extras`、**`sync extras-dry-run`**）。**未在本仓库实现**的多为 **Claw 等宿主**（写清单、调库、LLM 拼装），见文末「宿主集成」。
+
 ## 依赖安装（开发）
 
 ```bash
@@ -17,7 +19,7 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 - [x] `api`：`MmemApiClient` — `health`、`get_me`、`list_agents`、`begin_submit`、`mark_completed`
 - [x] `pnms_bridge`：`PnmsMemoryBridge` — 按 `user_uuid` + `agent_name` 设置 `concept_checkpoint_dir` 与 `user_id`
 - [x] `session`：`ChatMemorySession` — `handle_turn`（PNMS `handle` + `content_to_remember` 默认规则）
-- [x] 单元测试：`tests/test_sync_payload.py`、`tests/test_llm_profiles.py`、`tests/test_register_crypto.py`、`tests/test_memory_crypto.py`
+- [x] 单元测试：`tests/test_sync_payload.py`、`tests/test_llm_profiles.py`、`tests/test_register_crypto.py`、`tests/test_memory_crypto.py`；**`tests/test_sync_manifest.py`**、**`tests/test_workspace_extras.py`**
 - [x] `llm_profiles` + `ollama_llm`：默认 Ollama；`~/.mindmemory/config.toml` 多 profile；环境变量覆盖
 
 ### 加密与注册材料（见设计文档 §11、`mindmemory/tools/gen_register_bundle.py`）
@@ -33,9 +35,9 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 - [x] `mmem chat` — 默认 `--llm ollama`；`--profile` / `-p`；`--ollama-url`、`--model`；`mock`/`echo`；`--no-remote`
 - [x] `mmem models` — 列出已加载 profile
 - [x] **`mmem sync encrypt-file` / `decrypt-file`** — K_seed 加解密文件
-- [x] **`mmem sync push`** — 仅 **`pnms_bundle.enc`**（PNMS 目录 tar.gz + K_seed AES-GCM）；无 `--git-dir` 时只写本地 `./pnms_bundle.enc`
+- [x] **`mmem sync push`** — **`pnms_bundle.enc`**（PNMS tar.gz + K_seed）；可选 **`--sync-extras`** 生成 **`mmem/bundles/extras.enc`**；无 `--git-dir` 时只写本地 **`./pnms_bundle.enc`**
 - [x] **推送前**：`git fetch` + 与 `origin/<schema>` 比较；**behind/diverged** 时**不占锁**并退出（exit 2），提示先 **`mmem memory merge`**
-- [x] **`mmem memory merge`** — `git fetch` + `git pull --rebase`；可选 `--import-bundle` → `import_encrypted_bundle_to_agent_checkpoint`
+- [x] **`mmem memory merge`** — `git fetch` + `git pull --rebase`；可选 **`--import-bundle`** / **`--import-extras`**
 - [x] **`mmem memory import-bundle`** — `memory_bundle` 解密合并落盘；CLI 不直接 import pnms
 - [x] **origin 校验**：默认要求 URL 含 Gogs 用户名片段（`--skip-remote-check` 可关）
 - [x] **`--pack-pnms`**：覆盖默认 PNMS 目录（默认 `MMEM_PNMS_DATA_ROOT/<user>/<agent>/`）
@@ -44,12 +46,13 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 
 - [x] 对真实 `MMEM_BASE_URL`：手动运行 `mmem doctor` + `mmem chat -m "hi" --llm mock`（`--no-remote` 已可离线验证 PNMS）
 - [x] `MMEM_INTEGRATION=1`（mindmemory 仓库）全链路：需 MySQL、Gogs、已注册账号与私钥；示例：`cd ../mindmemory && MMEM_INTEGRATION=1 MMEM_BASE_URL=http://127.0.0.1:8000 GOGS_REPO_ROOT=…/mindmemory/.data/gogs-repositories python -m pytest tests/test_integration_flow.py -v`
+- [x] 本仓库自动化：**`tests/test_integration_git_smoke.py`**（临时 git + extras 往返，无需远端）
 
 ---
 
 ## workspace + 运行时清单（见 [docs/memory-repo-extended-layout.md](docs/memory-repo-extended-layout.md)）
 
-设计目标：在 **`pnms/`**、**`repo/`** 同级增加 **`workspace/`**；用 **`workspace/.mmem-sync-manifest.json`**（**不入记忆 Git**）声明本次要打包进 **extras** 类密文的相对路径；上传/下载与现有 **`K_seed`**、**`mmem sync push`** / **`mmem memory merge`** 同一条同步故事，渐进落地。
+**已实现**：**`pnms/`**、**`repo/`**、**`workspace/`** 同级；**`workspace/.mmem-sync-manifest.json`**（不入记忆 Git）声明打入 **`mmem/bundles/extras.enc`** 的路径；与 **`K_seed`**、**`mmem sync push`** / **`mmem memory merge`** 同一套同步流程（见上节 CLI 与下文勾选）。
 
 ### 目录与初始化
 
@@ -85,7 +88,7 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 - [x] 单元测试：`tests/test_sync_manifest.py`、`tests/test_workspace_extras.py`
 - [x] 集成测试（可选）：**`tests/test_integration_git_smoke.py`**（临时 `git init` + `mmem/bundles/extras.enc` commit + 解密回写）
 
-### 宿主集成（库外，仅跟踪）
+### 宿主集成（本仓库不实现，供 OpenClaw / 自研插件跟踪）
 
-- [ ] Claw 记忆插件：启动时写清单 → 调库打包加密 → 走既有 sync；**不**在库内绑定 Claw
-- [ ] （可选）**LLM 拼装**（文档 §6）：CLI 或插件侧将 **workspace 明文 / extras 解密结果** 与 PNMS **`get_context`** 按序拼接——**非**本库强制实现，属宿主责任
+- [ ] **Claw 记忆插件**：实例启动时写 **`.mmem-sync-manifest.json`** → 调用 **mindmemory-client** 打包/加密 → **`mmem sync push`**（或等价流程）；**不在**本库内绑定 Claw。
+- [ ] （可选）**LLM 上下文**：按 [memory-repo-extended-layout.md §6](docs/memory-repo-extended-layout.md) 将 **workspace / extras 解密内容** 与 PNMS **`get_context`** 拼接；由 **CLI 或宿主** 实现，**非** mindmemory-client 必选能力。
