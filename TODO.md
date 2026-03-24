@@ -44,3 +44,49 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 
 - [ ] 对真实 `MMEM_BASE_URL`：手动运行 `mmem doctor` + `mmem chat -m "hi" --llm mock`（`--no-remote` 已可离线验证 PNMS）
 - [ ] `MMEM_INTEGRATION=1`（mindmemory 仓库）全链路：需 MySQL、Gogs、已注册账号与私钥
+
+---
+
+## workspace + 运行时清单（见 [docs/memory-repo-extended-layout.md](docs/memory-repo-extended-layout.md)）
+
+设计目标：在 **`pnms/`**、**`repo/`** 同级增加 **`workspace/`**；用 **`workspace/.mmem-sync-manifest.json`**（**不入记忆 Git**）声明本次要打包进 **extras** 类密文的相对路径；上传/下载与现有 **`K_seed`**、**`mmem sync push`** / **`mmem memory merge`** 同一条同步故事，渐进落地。
+
+### 目录与初始化
+
+- [ ] `agent_workspace`：提供 **`agent_workspace_dir` / `resolve_workspace_dir_for_user_agent`**（或等价命名）指向 `<agent>/workspace/`，与 `pnms`、`repo` 同级
+- [ ] **`mmem agent init`**（或 `ensure_default_agent_workspace`）：可选创建空 **`workspace/`**（及文档说明清单由调用方写入）
+- [ ] 文档：`repo/.gitignore` 建议片段（避免误将 `../workspace` 绑进记忆仓）；在 `mmem-使用说明.md` 中同步「已实现」行为
+
+### 清单 `.mmem-sync-manifest.json`
+
+- [ ] 定义 **`schema_version`** 与 JSON Schema 或 dataclass（`bundles[]`：`id`、`include`、`optional` 等）
+- [ ] 解析与校验：未知 `schema_version` 时明确报错或降级策略
+- [ ] **路径安全**：`include` 仅允许相对 `workspace/` 的路径，拒绝 **`..`**、绝对路径、越界符号链接（按实现定策略）
+- [ ] **`optional`**：缺失文件时跳过或失败的行为与日志
+
+### 库 API（mindmemory_client）
+
+- [ ] **`pack_workspace_extras_to_enc(manifest, workspace_root, key) -> bytes`**（或等价）：按 `include` 打 **tar.gz** → **`encrypt_memory_base64`**（与 `pnms_bundle.enc` 同管道）
+- [ ] **`decrypt_extras_bundle_to_workspace(bundle_path, workspace_root, key, *, merge_policy=...)`**（或等价）：解密 → 解压到 `workspace/` 相对路径；**默认不覆盖** **`.mmem-sync-manifest.json`**（与文档 §4 一致）
+- [ ] 与现有 **`memory_bundle`** / **`import_encrypted_bundle_to_agent_checkpoint`**（仅 PNMS）边界清晰：extras **不进** `pnms/` checkpoint 合并逻辑，仅落 **`workspace/`**
+
+### `repo/` 内产物路径（与 §5 兼容）
+
+- [ ] 固定首轮实现：例如根目录 **`extras_bundle.enc`** **或** **`mmem/bundles/extras.enc`**（二选一并写死文档，避免漂移）
+- [ ] （可选，长期）**`mmem/repo.schema.json`**：声明仓内 bundles 列表与路径；push/merge 时校验
+
+### CLI `mmem`
+
+- [ ] **`mmem sync push`**：若存在支持的清单且 **`--sync-extras`**（或默认-on，需产品决策）则生成 extras 密文并 **`git add`** 与 **`pnms_bundle.enc`** 同批提交
+- [ ] **`mmem memory merge`** / **`import-bundle`**：在现有 **`pnms_bundle.enc`** 流程之外，检测 extras 密文文件并解密解压到 **`workspace/`**（可与 `--import-extras` 开关配合）
+- [ ] （可选）子命令或 flag：仅生成/校验清单、干跑列出将打入 tar 的路径
+
+### 测试与安全
+
+- [ ] 单元测试：清单解析、路径 sanitize、空清单、缺失 optional 文件、tar 内容与加密往返
+- [ ] 集成测试（可选）：临时 git 仓库下 push 与 merge 双机路径的 smoke
+
+### 宿主集成（库外，仅跟踪）
+
+- [ ] Claw 记忆插件：启动时写清单 → 调库打包加密 → 走既有 sync；**不**在库内绑定 Claw
+- [ ] （可选）**LLM 拼装**（文档 §6）：CLI 或插件侧将 **workspace 明文 / extras 解密结果** 与 PNMS **`get_context`** 按序拼接——**非**本库强制实现，属宿主责任

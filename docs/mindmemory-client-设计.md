@@ -23,6 +23,8 @@
 | **配套 CLI（见第 10 节）** | 不依赖 Claw：本地对话调试 PNMS + mindmemory-client + MindMemory；并可演进为**官方命令行客户端**（配置、健康检查、可选 Git 同步演练）。 |
 | 具体 Claw 插件（如 openclaw-mmem） | Workspace 路径、Hooks/Tools、Git 工作副本、`git push` 分支名、`MEMORY.md` 等**产品层**逻辑。 |
 
+**扩展阅读**：若需在 **Agent 目录**下与 **`pnms/`**、**`repo/`** 并列维护 **`workspace/`**，并以**运行时清单**（**`.mmem-sync-manifest.json`**，不入记忆 Git）声明要加密同步的文件子集，见 **[memory-repo-extended-layout.md](./memory-repo-extended-layout.md)**（设计提案；亦含多 bundle 与 `pnms_bundle.enc` 兼容说明）。
+
 ### 1.3 非目标
 
 - 不实现 OpenClaw/Claw 插件注册、不依赖任何 Gateway SDK。

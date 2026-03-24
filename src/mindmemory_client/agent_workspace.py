@@ -2,6 +2,9 @@
 Agent 工作区：账号目录下 ``accounts/<user_uuid>/agents/<agent>/``，
 含 PNMS 数据（``pnms/``）与记忆 Git 仓库（``repo/``）。
 
+设计文档另约定可选同级 ``workspace/``（Claw/CLI 源文件池）及运行时清单
+``workspace/.mmem-sync-manifest.json``（不入 ``repo``），见 ``docs/memory-repo-extended-layout.md``。
+
 与 MindMemory 约定一致：远端仓库在**首次 begin-submit** 时由服务端创建；
 本地通过 ``ensure_agent_registered_on_server`` 触发注册后，再 ``git clone`` SSH 地址。
 OpenClaw 等宿主应把当前 Agent 名映射为 ``agent_name``，与此处相同。
