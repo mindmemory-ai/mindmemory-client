@@ -73,7 +73,6 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 ### `repo/` 内产物路径（与 §5 兼容）
 
 - [x] 固定：**`mmem/bundles/extras.enc`**（相对记忆 Git 根）
-- [ ] （可选，长期）**`mmem/repo.schema.json`**
 
 ### CLI `mmem`
 
