@@ -53,14 +53,14 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 
 ## 客户端后续改进（设计见 [docs/mindmemory-client-设计.md §10.8](docs/mindmemory-client-设计.md)）
 
-- [ ] **可操作错误提示**：同步 / Git 落后 / 签名校验失败等，在提示中附带建议命令（如先 **`mmem memory merge`**）
-- [ ] **调试可观测性**：**`mmem chat`** 可选 **`--verbose`** 或环境变量，打印 **`num_slots_used`**、**`phase`** 等
-- [ ] **CLI 回归**：**Typer `CliRunner`** 覆盖 **`mmem`** 关键子命令退出码与关键输出片段
-- [ ] **远端 opt-in E2E**：凭证 + **`MMEM_BASE_URL`** 可用时的只读烟测（**`-m e2e_remote`** 或环境变量门控）
-- [ ] **OpenAI 兼容 LLM**：与 **Ollama** 并列的 profile 后端（HTTP + API Key）
-- [ ] **（可选）extras 进对话**：库或 CLI 可选将 **`extras.enc` 解密片段**按 memory-repo-extended-layout §6 拼入上下文
-- [ ] **发布**：语义化版本 + **CHANGELOG**；文档区分最小安装与含 **`pnms`/`torch`** 的完整能力
-- [ ] **i18n 统一**：**`chat_strings`** 扩展至 **`doctor`** 等，或文档固定「仅 chat 多语言」
+- [x] **可操作错误提示**：同步 / Git 落后 / 签名校验失败等，在提示中附带建议命令（如先 **`mmem memory merge`**）
+- [x] **调试可观测性**：**`mmem chat`** 可选 **`--verbose`** / **`MMEM_CHAT_DEBUG`**，打印 **`num_slots_used`**、**`phase`**、**`context` 长度**
+- [x] **CLI 回归**：**Typer `CliRunner`** 覆盖 **`mmem`** 关键子命令退出码与关键输出片段（**`tests/test_cli_mmem.py`**）
+- [x] **远端 opt-in E2E**：**`pytest -m e2e_remote`** + **`MMEM_BASE_URL`** 门控（**`tests/test_e2e_remote_mmem.py`**）
+- [x] **OpenAI 兼容 LLM**：profile **`openai_chat`** + **`mmem chat --llm openai`**（**`OPENAI_API_KEY`** / **`OPENAI_BASE_URL`**）
+- [x] **（可选）extras 进对话**：**`read_extras_enc_text_block`** / **`merge_workspace_prompt_and_extras`**；**`mmem chat --chat-extras`** / **`MMEM_CHAT_INCLUDE_EXTRAS`**
+- [x] **发布**：**0.2.0** + **`CHANGELOG.md`**；**README** 区分最小安装与 **`pnms`/`torch`** 完整能力
+- [x] **i18n 统一**：文档固定 **`mmem chat` 多语言**；**`doctor` 等暂固定中文**（见 **`docs/mmem-使用说明.md`** §9.1）
 
 ---
 

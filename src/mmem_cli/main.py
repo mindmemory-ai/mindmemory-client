@@ -23,6 +23,7 @@ from mindmemory_client.config import MindMemoryClientConfig
 from mindmemory_client.errors import MindMemoryAPIError
 from mindmemory_client.llm_profiles import default_config_path, effective_ollama_url, load_llm_profiles_from_toml, resolve_profile
 from mindmemory_client.memory_schema import resolve_memory_schema_version
+from mindmemory_client.openai_chat_llm import build_openai_chat_llm
 from mindmemory_client.ollama_llm import build_ollama_llm, ollama_health, write_prompt_dump_file
 
 from mmem_cli.account import account_app
@@ -150,6 +151,15 @@ def _build_llm_callback(
         ollama_model_override=model,
     )
     wb = workspace_text.strip() if workspace_text else None
+    use_openai = llm_mode == "openai" or prof.backend == "openai_chat"
+    if use_openai:
+        return build_openai_chat_llm(
+            prof,
+            workspace_block=wb,
+            lang=chat_lang,
+            dump_prompt_path=prompt_dump_path,
+            dump_append=prompt_dump_append,
+        )
     return build_ollama_llm(
         prof,
         workspace_block=wb,
@@ -260,7 +270,7 @@ def chat(
     llm_mode: str = typer.Option(
         "ollama",
         "--llm",
-        help="ollama（默认，读 profile）| mock | echo",
+        help="ollama（默认，读 profile）| openai（或 profile.backend=openai_chat）| mock | echo",
     ),
     profile: str = typer.Option(
         "default",
@@ -295,6 +305,17 @@ def chat(
         "--prompt-dump-append",
         help="与 --prompt-dump 联用：追加多轮内容（默认每轮覆盖整文件）",
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="每轮在 stderr 打印 phase、num_slots_used、context 长度（也可用 MMEM_CHAT_DEBUG=1）",
+    ),
+    chat_extras: bool = typer.Option(
+        False,
+        "--chat-extras",
+        help="解密记忆仓库 repo/mmem/bundles/extras.enc 并拼入工作区上下文（需私钥；或 MMEM_CHAT_INCLUDE_EXTRAS=1）",
+    ),
 ) -> None:
     """交互对话或 -m 单次；每轮经 ``ChatMemorySession`` / ``PnmsMemoryBridge`` 更新记忆并落盘。默认走本地 Ollama。"""
     try:
@@ -316,7 +337,7 @@ def chat(
         seed_default_workspace_template,
     )
     from mindmemory_client.chat_strings import chat_strings, get_chat_lang
-    from mindmemory_client.workspace_prompt import read_workspace_prompt_block
+    from mindmemory_client.workspace_prompt import merge_workspace_prompt_and_extras, read_workspace_prompt_block
 
     chat_lang = get_chat_lang()
     strs = chat_strings(chat_lang)
@@ -335,8 +356,45 @@ def chat(
         for w in ws_warns:
             logger.warning("workspace prompt: %s", w)
 
+    include_extras = chat_extras or _env_truthy("MMEM_CHAT_INCLUDE_EXTRAS")
+    extras_block: str | None = None
+    if include_extras:
+        if not cfg.private_key_path:
+            if not quiet:
+                typer.echo(strs["status_extras_no_key"], err=True)
+        else:
+            from mindmemory_client.agent_workspace import resolve_git_dir_for_sync
+            from mindmemory_client.keys import read_openssh_private_key_pem
+            from mindmemory_client.register_crypto import k_seed_bytes_from_private_key_openssh
+            from mindmemory_client.workspace_extras import extras_bundle_path_in_repo, read_extras_enc_text_block
+
+            git_root = resolve_git_dir_for_sync(cfg, agent)
+            if git_root is None:
+                if not quiet:
+                    typer.echo(strs["status_extras_no_repo"], err=True)
+            else:
+                ep = extras_bundle_path_in_repo(git_root)
+                pem = read_openssh_private_key_pem(Path(cfg.private_key_path))
+                key = k_seed_bytes_from_private_key_openssh(pem)
+                extras_block, extras_warns = read_extras_enc_text_block(ep, key)
+                for w in extras_warns:
+                    logger.warning("extras context: %s", w)
+                if extras_block:
+                    if not quiet:
+                        typer.echo(strs["status_extras_loaded"])
+                elif extras_warns and not quiet:
+                    typer.echo(strs["status_extras_failed"].format(details="; ".join(extras_warns)), err=True)
+
+    combined_ws = merge_workspace_prompt_and_extras(
+        ws_block,
+        extras_block,
+        extras_section_intro=str(strs["extras_bundle_section_intro"]),
+    )
+
     if not quiet:
         _emit_workspace_chat_status(ws_dir, skip_ws, ws_block, ws_warns, strs)
+
+    chat_debug = verbose or _env_truthy("MMEM_CHAT_DEBUG")
 
     pnms_ckpt = resolve_pnms_dir_for_user_agent(cfg, uid, agent)
     bridge = PnmsMemoryBridge(cfg.pnms_data_root, uid, agent, checkpoint_dir=pnms_ckpt)
@@ -347,19 +405,30 @@ def chat(
         ollama_url,
         model,
         config_path,
-        workspace_text=ws_block if not skip_ws else None,
+        workspace_text=combined_ws,
         chat_lang=chat_lang,
         prompt_dump_path=prompt_dump,
         prompt_dump_append=prompt_dump_append,
     )
     logger.info("mmem chat agent=%s llm_mode=%s user=%s", agent, llm_mode, uid)
 
-    if llm_mode == "ollama":
-        p = resolve_profile(load_llm_profiles_from_toml(config_path), profile, ollama_url_override=ollama_url, ollama_model_override=model)
-        typer.echo(
-            f"[LLM] profile={profile!r} model={p.ollama_model} @ {effective_ollama_url(p)} "
-            f"(target={p.target}, auth={'yes' if p.api_token else 'no'})"
+    if llm_mode not in ("mock", "echo"):
+        p = resolve_profile(
+            load_llm_profiles_from_toml(config_path),
+            profile,
+            ollama_url_override=ollama_url,
+            ollama_model_override=model,
         )
+        if llm_mode == "openai" or p.backend == "openai_chat":
+            typer.echo(
+                f"[LLM] profile={profile!r} OpenAI 兼容 model={p.ollama_model} @ {p.openai_base_url.rstrip('/')} "
+                f"(auth={'yes' if p.api_token else 'no'})"
+            )
+        else:
+            typer.echo(
+                f"[LLM] profile={profile!r} model={p.ollama_model} @ {effective_ollama_url(p)} "
+                f"(target={p.target}, auth={'yes' if p.api_token else 'no'})"
+            )
 
     if not no_remote and cfg.user_uuid:
         try:
@@ -373,6 +442,11 @@ def chat(
 
     def one_turn(q: str) -> None:
         r = session.handle_turn(q, llm_fn)
+        if chat_debug:
+            typer.echo(
+                f"[chat] phase={r.phase} num_slots_used={r.num_slots_used} context_chars={len(r.context)}",
+                err=True,
+            )
         typer.echo(r.response)
         session.save_checkpoint()
 
@@ -732,6 +806,10 @@ def sync_push(
         _git_fetch_origin(git_repo)
     except subprocess.CalledProcessError as e:
         typer.echo(f"git fetch 失败: {e}", err=True)
+        typer.echo(
+            "提示：请检查网络、凭据与 origin URL；拉取成功后再执行 mmem sync push。",
+            err=True,
+        )
         raise typer.Exit(1)
 
     rel = _git_compare_with_remote(git_repo, schema)
@@ -842,6 +920,11 @@ def sync_push(
         typer.echo(f"mark-completed: ok, commit_id={commit_id}")
     except subprocess.CalledProcessError as e:
         typer.echo(f"git 失败: {e}", err=True)
+        typer.echo(
+            "提示：若为 add/commit/push 阶段失败，可在仓库内手动 git status 排查；"
+            f"若与远端不同步，可先：\n  mmem memory merge --git-dir {git_repo} --schema {schema}",
+            err=True,
+        )
         if lock_uuid:
             try:
                 with MmemApiClient(cfg) as api:
@@ -1091,6 +1174,10 @@ def memory_merge(
         )
     except subprocess.CalledProcessError as e:
         typer.echo(f"git fetch 失败: {e}", err=True)
+        typer.echo(
+            "提示：请检查网络、凭据与 origin URL 后再执行 mmem memory merge。",
+            err=True,
+        )
         raise typer.Exit(1)
     pr = subprocess.run(
         ["git", "-C", str(git_dir), "pull", "--rebase", "origin", schema],

@@ -8,8 +8,10 @@ import pytest
 from mindmemory_client.env_loader import reset_dotenv_loaded
 from mindmemory_client.llm_profiles import (
     LlmProfile,
+    LlmProfilesConfig,
     default_config_path,
     load_llm_profiles_from_toml,
+    resolve_profile,
     upsert_llm_profile,
     write_llm_profiles_to_toml,
 )
@@ -114,3 +116,15 @@ def test_upsert_merges(tmp_path: Path):
     cfg = load_llm_profiles_from_toml(p)
     assert set(cfg.profiles.keys()) == {"p1", "p2"}
     assert cfg.default_profile == "p1"
+
+
+def test_resolve_profile_openai_api_key_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    cfg = LlmProfilesConfig(
+        default_profile="oai",
+        profiles={
+            "oai": LlmProfile(backend="openai_chat", ollama_model="gpt-4o-mini"),
+        },
+    )
+    p = resolve_profile(cfg, "oai")
+    assert p.api_token == "sk-test"

@@ -45,6 +45,15 @@ _TABLE: dict[str, dict[str, Any]] = {
         "status_workspace_missing": "工作区提示：未找到 mmem-workspace.json，仅使用默认系统提示。",
         "status_workspace_no_prompt": "工作区提示：已找到 mmem-workspace.json，但未配置 prompt 或无可读文件。",
         "status_workspace_errors": "工作区提示：解析或读取存在问题 — {details}",
+        "extras_bundle_section_intro": (
+            "以下为记忆仓库 mmem/bundles/extras.enc 解密片段（与 sync.bundles 一致）。"
+        ),
+        "status_extras_loaded": (
+            "工作区 extras：已解密 extras.enc 并拼入 LLM 工作区上下文（顺序见 memory-repo-extended-layout §6）。"
+        ),
+        "status_extras_no_key": "工作区 extras：未配置私钥，跳过 extras.enc（解密需 K_seed）。",
+        "status_extras_no_repo": "工作区 extras：未找到 Agent repo/，跳过 extras.enc。",
+        "status_extras_failed": "工作区 extras：{details}",
     },
     "en": {
         "session_system_default": "You are a helpful assistant; answer strictly based on memory context when provided.",
@@ -62,5 +71,14 @@ _TABLE: dict[str, dict[str, Any]] = {
         "status_workspace_missing": "Workspace: mmem-workspace.json not found; using default system prompt only.",
         "status_workspace_no_prompt": "Workspace: mmem-workspace.json exists but has no prompt or no readable files.",
         "status_workspace_errors": "Workspace: issues while parsing/reading — {details}",
+        "extras_bundle_section_intro": (
+            "Decrypted contents from repo mmem/bundles/extras.enc (same file set as sync.bundles)."
+        ),
+        "status_extras_loaded": (
+            "Workspace extras: decrypted extras.enc into LLM workspace block (ordering: memory-repo-extended-layout §6)."
+        ),
+        "status_extras_no_key": "Workspace extras: no private key configured; skip extras.enc (K_seed required).",
+        "status_extras_no_repo": "Workspace extras: Agent repo/ not found; skip extras.enc.",
+        "status_extras_failed": "Workspace extras: {details}",
     },
 }

@@ -177,7 +177,7 @@ Thumbs.db
 | 顺序 | 来源 | 说明 |
 |------|------|------|
 | 1 | **`mmem-workspace.json`** 中 **`prompt.include`** 指向的明文（若配置） | 可与 `sync` 子集不同；库提供 **`prompt_context_paths_for_workspace`** |
-| 2 | 解密 **`extras.enc`** 得到的人格/配置片段 | 与 **`sync.bundles`** 一致 |
+| 2 | 解密 **`extras.enc`** 得到的人格/配置片段 | 与 **`sync.bundles`** 一致；**`mmem chat --chat-extras`**（或 **`MMEM_CHAT_INCLUDE_EXTRAS=1`**）经 **`read_extras_enc_text_block`** 拼入（需 **`K_seed`**） |
 | 3 | PNMS `get_context` | 神经记忆 |
 | 4 | 用户消息 | — |
 

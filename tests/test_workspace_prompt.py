@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from mindmemory_client.sync_manifest import WORKSPACE_CONFIG_FILENAME
-from mindmemory_client.workspace_prompt import read_workspace_prompt_block
+from mindmemory_client.workspace_prompt import merge_workspace_prompt_and_extras, read_workspace_prompt_block
 
 
 def test_bt7274_template_shipped_in_package() -> None:
@@ -18,6 +18,24 @@ def test_bt7274_template_shipped_in_package() -> None:
     assert WORKSPACE_CONFIG_FILENAME in names
     assert "identity.md" in names
     assert "soul.md" in names
+
+
+def test_merge_workspace_prompt_and_extras() -> None:
+    m = merge_workspace_prompt_and_extras(
+        "[p]\nx",
+        "[f]\ny",
+        extras_section_intro="[extras]",
+    )
+    assert m
+    assert "[p]" in m
+    assert "[extras]" in m
+    assert "[f]" in m
+    assert "---" in m
+
+
+def test_merge_workspace_prompt_and_extras_extras_only() -> None:
+    m = merge_workspace_prompt_and_extras(None, "only", extras_section_intro="E")
+    assert m == "E\n\nonly"
 
 
 def test_read_workspace_prompt_block_from_template_copy(tmp_path: Path) -> None:

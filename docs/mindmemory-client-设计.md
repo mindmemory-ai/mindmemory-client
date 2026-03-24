@@ -328,9 +328,9 @@ Ollama 路径见 §10.5.1：**`system`** + **`user`**；`mmem doctor` 会探测 
 - **集成**：`MMEM_INTEGRATION=1` 时对真实 `MMEM_BASE_URL` 跑 `doctor` + 可选 `sync status`（只读）。
 - **本仓库**：**`tests/test_large_memory_scenario.py`**（`@pytest.mark.integration`）：30 轮对话 → **`pnms_bundle`** → **`import_encrypted_bundle_to_agent_checkpoint`** → 20 轮追问；每轮将 PNMS 传入 LLM 的 **`(query, context)`** 落盘；不依赖真实账号目录。
 
-### 10.8 客户端后续改进（产品 / 工程，待迭代）
+### 10.8 客户端后续改进（产品 / 工程）
 
-以下为本仓库**尚未全面落地**、但建议在路线图或 issue 中跟踪的方向；与 §10.5.1「仍可演进」互补。
+以下与 §10.5.1「仍可演进」互补；**落地进度以 [TODO.md](../TODO.md) 勾选为准**（如 **`--chat-extras`**、OpenAI 兼容后端、**CHANGELOG** / 安装层次说明等）。
 
 | 方向 | 说明 |
 |------|------|

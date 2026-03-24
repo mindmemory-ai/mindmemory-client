@@ -48,3 +48,22 @@ def read_workspace_prompt_block(workspace_root: Path) -> tuple[str | None, list[
     if not parts:
         return None, warnings
     return "\n\n".join(parts), warnings
+
+
+def merge_workspace_prompt_and_extras(
+    prompt_block: str | None,
+    extras_block: str | None,
+    *,
+    extras_section_intro: str,
+) -> str | None:
+    """
+    按 memory-repo-extended-layout §6：先 ``prompt`` 明文，再 extras 解密片段（由调用方传入已解密的 ``extras_block``）。
+    """
+    chunks: list[str] = []
+    if prompt_block and prompt_block.strip():
+        chunks.append(prompt_block.strip())
+    if extras_block and extras_block.strip():
+        chunks.append(extras_section_intro.strip() + "\n\n" + extras_block.strip())
+    if not chunks:
+        return None
+    return "\n\n---\n\n".join(chunks)

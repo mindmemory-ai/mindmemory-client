@@ -22,14 +22,17 @@ def default_config_path() -> Path:
 class LlmProfile(BaseModel):
     """单个大模型配置（命名 profile）。"""
 
-    backend: Literal["ollama", "mock", "echo"] = "ollama"
-    """本机或远程均走 Ollama 兼容 HTTP（/api/chat）。"""
+    backend: Literal["ollama", "mock", "echo", "openai_chat"] = "ollama"
+    """``ollama``：Ollama ``/api/chat``；``openai_chat``：OpenAI 兼容 ``/v1/chat/completions``。"""
     target: Literal["local", "remote"] = "local"
     """local：默认本机 11434；remote：自定义 URL，可配 api_token。"""
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "llama3.2"
+    """Ollama 模型名；``backend=openai_chat`` 时作为 Chat Completions 的 ``model``。"""
+    openai_base_url: str = "https://api.openai.com/v1"
+    """``backend=openai_chat`` 时 API 根路径（含 ``/v1``）。"""
     api_token: str | None = None
-    """远程 Ollama / 网关鉴权：请求头 ``Authorization: Bearer <token>``。"""
+    """Bearer；Ollama 远程或 OpenAI / 兼容网关。"""
     timeout_s: float = 120.0
 
 
@@ -51,6 +54,7 @@ def _profile_from_mapping(item: dict, defaults: LlmProfile) -> LlmProfile:
         target=item.get("target", defaults.target),
         ollama_base_url=str(item.get("ollama_base_url", defaults.ollama_base_url)),
         ollama_model=str(item.get("ollama_model", defaults.ollama_model)),
+        openai_base_url=str(item.get("openai_base_url", defaults.openai_base_url)),
         api_token=item.get("api_token") if item.get("api_token") else None,
         timeout_s=float(item.get("timeout_s", defaults.timeout_s)),
     )
@@ -120,6 +124,8 @@ def write_llm_profiles_to_toml(path: Path, cfg: LlmProfilesConfig) -> None:
         lines.append(f'target = {_toml_value(p.target)}')
         lines.append(f'ollama_base_url = {_toml_value(p.ollama_base_url)}')
         lines.append(f'ollama_model = {_toml_value(p.ollama_model)}')
+        if p.backend == "openai_chat":
+            lines.append(f'openai_base_url = {_toml_value(p.openai_base_url)}')
         if p.api_token:
             lines.append(f'api_token = {_toml_value(p.api_token)}')
         lines.append(f'timeout_s = {_toml_value(p.timeout_s)}')
@@ -172,7 +178,13 @@ def resolve_profile(
         d["ollama_base_url"] = ollama_url_override
     if ollama_model_override:
         d["ollama_model"] = ollama_model_override
-    return LlmProfile.model_validate(d)
+    if get_env("OPENAI_BASE_URL"):
+        d["openai_base_url"] = str(get_env("OPENAI_BASE_URL")).strip()
+    tok_oai = get_env("OPENAI_API_KEY")
+    out = LlmProfile.model_validate(d)
+    if out.backend == "openai_chat" and tok_oai and str(tok_oai).strip():
+        out = out.model_copy(update={"api_token": str(tok_oai).strip()})
+    return out
 
 
 def effective_ollama_url(profile: LlmProfile) -> str:

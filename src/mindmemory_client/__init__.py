@@ -44,8 +44,9 @@ from mindmemory_client.workspace_extras import (
     decrypt_extras_bundle_file_to_workspace,
     dry_run_workspace_extras_paths,
     pack_workspace_extras_to_enc,
+    read_extras_enc_text_block,
 )
-from mindmemory_client.workspace_prompt import read_workspace_prompt_block
+from mindmemory_client.workspace_prompt import merge_workspace_prompt_and_extras, read_workspace_prompt_block
 from mindmemory_client.client_home import default_client_home
 from mindmemory_client.client_state import resolve_mmem_config
 from mindmemory_client.credential_source import credential_source
@@ -93,5 +94,7 @@ __all__ = [
     "pack_workspace_extras_to_enc",
     "dry_run_workspace_extras_paths",
     "decrypt_extras_bundle_file_to_workspace",
+    "read_extras_enc_text_block",
     "read_workspace_prompt_block",
+    "merge_workspace_prompt_and_extras",
 ]

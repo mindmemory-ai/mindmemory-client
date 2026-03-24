@@ -198,21 +198,23 @@ OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 AP
 
 ## 9. `mmem chat`
 
-与本地 **Ollama**（默认）或 `mock` / `echo` 对话，每轮通过 **PNMS** 更新记忆并 `save_checkpoint`。Ollama 侧优先调用 **`POST /api/chat`**；若返回 **404**（例如版本过旧无 Chat API），会自动回退 **`POST /api/generate`**。若 **两个接口都返回 404**，多为 **模型名与 `ollama list` 不一致** 或 **`MMEM_OLLAMA_URL` 未指向正在运行的 Ollama**（Ollama 0.18+ 均提供上述 API）。请保证已 **`ollama pull`** 且模型名与 profile 完全一致。
+与本地 **Ollama**（默认）、**OpenAI 兼容**（`--llm openai` 或 profile `backend = "openai_chat"`，请求 **`POST /v1/chat/completions`**，密钥可用 **`OPENAI_API_KEY`**，基址可用 **`OPENAI_BASE_URL`**），或 `mock` / `echo` 对话，每轮通过 **PNMS** 更新记忆并 `save_checkpoint`。Ollama 侧优先调用 **`POST /api/chat`**；若返回 **404**（例如版本过旧无 Chat API），会自动回退 **`POST /api/generate`**。若 **两个接口都返回 404**，多为 **模型名与 `ollama list` 不一致** 或 **`MMEM_OLLAMA_URL` 未指向正在运行的 Ollama**（Ollama 0.18+ 均提供上述 API）。请保证已 **`ollama pull`** 且模型名与 profile 完全一致。
 
 | 选项 | 说明 |
 |------|------|
 | `-m` / `--message` | 单次提问后退出 |
 | `--agent` | Agent 名（PNMS 与 MMEM 隔离；默认 `BT-7274`） |
-| `--llm` | `ollama`（默认）、`mock`、`echo` |
+| `--llm` | `ollama`（默认）、`openai`（或配置中 `openai_chat`）、`mock`、`echo` |
+| `--verbose` / `-v` | 每轮在 stderr 打印 **`phase`**、**`num_slots_used`**、**`context` 字符数**；等价于环境变量 **`MMEM_CHAT_DEBUG=1`** |
 | `-p` / `--profile` | LLM profile 名 |
 | `--ollama-url` / `--model` | 覆盖当前 profile |
 | `--no-remote` | 不请求 MindMemory `/health` |
 | `--config` | `config.toml` 路径 |
 | `--no-workspace-prompt` | 不读取 **`workspace/mmem-workspace.json`** 的 **`prompt`** 段（仅 PNMS 默认系统提示）；也可用 **`MMEM_CHAT_NO_WORKSPACE_PROMPT=1`** |
 | `--quiet` / `-q` | 不打印工作区状态行（启动时仍会做日志） |
-| `--prompt-dump <文件>` | 每轮将实际发给 LLM 的提示写入该路径（**Ollama**：`[role: system]` / `[role: user]`；**mock/echo**：`query` + 传入 LLM 的 `context`）；便于调试 |
+| `--prompt-dump <文件>` | 每轮将实际发给 LLM 的提示写入该路径（**Ollama / OpenAI 兼容**：`[role: system]` / `[role: user]`；**mock/echo**：`query` + 传入 LLM 的 `context`）；便于调试 |
 | `--prompt-dump-append` | 与 `--prompt-dump` 联用：多轮**追加**（默认每轮**覆盖**整文件） |
+| `--chat-extras` | 读取 Agent 记忆仓库 **`repo/mmem/bundles/extras.enc`**，用 **`K_seed`**（私钥）解密后按 [memory-repo-extended-layout §6](../memory-repo-extended-layout.md) 拼入工作区上下文（与 **`prompt`** 并列）；也可用 **`MMEM_CHAT_INCLUDE_EXTRAS=1`** |
 
 **需先** `mmem account login`（或配置 `MMEM_CREDENTIAL_SOURCE=env` 与私钥）；未登录无法使用对话。PNMS 目录为 `accounts/<user_uuid>/agents/<agent>/pnms`。
 
@@ -220,8 +222,8 @@ OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 AP
 
 - **默认 Agent `BT-7274`**：首次在 `workspace/` 下无 **`mmem-workspace.json`** 时，会从包内模板复制 **`identity.md`**、**`soul.md`** 与配置（见 **`mindmemory_client.agent.BT-7274.workspace`**）。
 - **其他 Agent 名**：无内置模板时，请自行在 **`workspace/mmem-workspace.json`** 中配置 **`sync`** / **`prompt`**，或从 **`agent/BT-7274/workspace/`**（仓库根镜像，与包内一致）复制后改文件名与 `include`。
-- **Ollama**：工作区 **`prompt`** 正文作为 **`/api/chat`** 的 **system** 消息（与 PNMS 检索出的 **user** 消息分离）；`mock` / `echo` 则将工作区正文前缀到 PNMS 上下文字符串前，便于离线对照。
-- **文案语言**：**`MMEM_LANG=zh|en`**，或 **`LANG`** 以 `zh` / `en` 开头时推断；影响 **启动状态行**、**默认系统提示**、**Ollama 包装句**。
+- **Ollama / OpenAI 兼容**：工作区 **`prompt`** 正文作为 LLM 的 **system** 消息（与 PNMS 检索出的 **user** 消息分离）；**`--chat-extras`** 将 **`extras.enc`** 解密片段接在 **`prompt`** 之后（见 §6 顺序）；若 **`prompt.include`** 与 **`sync.bundles`** 含相同文件，可能重复，请按需只开其一或调整清单。`mock` / `echo` 则将工作区正文前缀到 PNMS 上下文字符串前，便于离线对照。
+- **文案语言**：**`MMEM_LANG=zh|en`**，或 **`LANG`** 以 `zh` / `en` 开头时推断；当前 **仅影响 `mmem chat`**（启动状态行、默认系统提示、LLM 包装句）；**`mmem doctor` 等其它子命令**暂为固定中文输出。
 - **仓库镜像校验**：在仓库根执行 **`python tools/check_agent_workspace_mirror.py`**，确认 **`src/mindmemory_client/agent/BT-7274/workspace/`** 与 **`agent/BT-7274/workspace/`** 文件一致（CI 可复用）。
 
 ### 9.2 `mmem pnms`（概念图与记忆图）

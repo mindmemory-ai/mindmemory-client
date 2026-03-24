@@ -141,3 +141,58 @@ def extras_bundle_path_in_repo(git_repo_root: Path) -> Path:
     from mindmemory_client.sync_manifest import EXTRAS_BUNDLE_REPO_RELPATH
 
     return git_repo_root / EXTRAS_BUNDLE_REPO_RELPATH
+
+
+def read_extras_enc_text_block(
+    bundle_path: Path,
+    key: bytes,
+) -> tuple[str | None, list[str]]:
+    """
+    解密 ``extras.enc``（Base64 单行），自 tar.gz 内按路径排序读取**文本**文件，
+    拼接格式与 ``read_workspace_prompt_block`` 一致（``[相对路径]`` + 正文），供 §6 第 2 步拼入 LLM 工作区上下文。
+
+    跳过 ``mmem-workspace.json``；非 UTF-8 文件记 warning 并跳过。
+    """
+    warnings: list[str] = []
+    if not bundle_path.is_file():
+        warnings.append(f"未找到 extras 密文: {bundle_path}")
+        return None, warnings
+    try:
+        b64 = bundle_path.read_text(encoding="utf-8").strip()
+        plain = decrypt_memory_base64(b64, key)
+    except Exception as e:
+        warnings.append(f"解密 extras 失败: {e}")
+        return None, warnings
+
+    parts: list[str] = []
+    with tarfile.open(fileobj=io.BytesIO(plain), mode="r:gz") as tar:
+        members = [m for m in tar.getmembers() if m.isfile()]
+        members.sort(key=lambda m: m.name)
+        for m in members:
+            name = m.name
+            rel = PurePosixPath(name)
+            parts_p = rel.parts
+            if ".." in parts_p:
+                warnings.append(f"跳过 tar 内非法路径: {name!r}")
+                continue
+            rel_s = str(rel)
+            if rel_s == WORKSPACE_CONFIG_FILENAME or rel_s.endswith("/" + WORKSPACE_CONFIG_FILENAME):
+                continue
+            f = tar.extractfile(m)
+            if f is None:
+                continue
+            try:
+                raw = f.read()
+            finally:
+                f.close()
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                warnings.append(f"跳过非 UTF-8 文件: {rel_s}")
+                continue
+            parts.append(f"[{rel_s}]\n{text.strip()}")
+
+    if not parts:
+        warnings.append("extras.tar 中无可用 UTF-8 文本文件")
+        return None, warnings
+    return "\n\n".join(parts), warnings

@@ -1,5 +1,6 @@
 # 复制到 ~/.mindmemory/config.toml 并按需修改
 # 环境变量可覆盖：MMEM_OLLAMA_URL、MMEM_OLLAMA_MODEL、MMEM_LLM_PROFILE、MMEM_OLLAMA_API_TOKEN、MMEM_CONFIG_PATH
+# OpenAI 兼容：`OPENAI_API_KEY`（backend=openai_chat 时写入 Bearer）、`OPENAI_BASE_URL`（覆盖 openai_base_url）
 # 也可用：mmem models configure --help
 
 [llm]
@@ -30,6 +31,15 @@ timeout_s = 60.0
 # ollama_base_url = "https://your-ollama-host"
 # ollama_model = "llama3.2"
 # api_token = "your-token"
+# timeout_s = 120.0
+
+# OpenAI 兼容（或任意 /v1/chat/completions 网关）；模型名仍用 ollama_model 字段
+# [[llm.profiles]]
+# name = "openai"
+# backend = "openai_chat"
+# openai_base_url = "https://api.openai.com/v1"
+# ollama_model = "gpt-4o-mini"
+# api_token = "sk-..."  # 或仅设置环境变量 OPENAI_API_KEY
 # timeout_s = 120.0
 
 # 方式二：嵌套表（与上等价，二选一即可）

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mindmemory-client"
-version = "0.1.0"
+version = "0.2.0"
 description = "Client library: PNMS + MindMemory Web API; includes mmem CLI."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -36,4 +36,5 @@ mindmemory_client = ["agent/**/*"]
 [tool.pytest.ini_options]
 markers = [
     "integration: 需 pnms+torch 的大型/慢速集成测试",
+    "e2e_remote: 需 MMEM_BASE_URL 的远端 opt-in 烟测",
 ]
