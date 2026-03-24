@@ -28,6 +28,17 @@ from mindmemory_client.register_crypto import (
     k_seed_bytes_from_private_key_openssh,
 )
 from mindmemory_client.session import ChatMemorySession
+from mindmemory_client.sync_manifest import (
+    MANIFEST_FILENAME,
+    EXTRAS_BUNDLE_REPO_RELPATH,
+    SyncManifest,
+    SyncManifestError,
+    load_sync_manifest,
+)
+from mindmemory_client.workspace_extras import (
+    decrypt_extras_bundle_file_to_workspace,
+    pack_workspace_extras_to_enc,
+)
 from mindmemory_client.client_home import default_client_home
 from mindmemory_client.client_state import resolve_mmem_config
 from mindmemory_client.credential_source import credential_source
@@ -62,4 +73,11 @@ __all__ = [
     "get_client_settings",
     "credential_source",
     "configure_client_logging",
+    "MANIFEST_FILENAME",
+    "EXTRAS_BUNDLE_REPO_RELPATH",
+    "SyncManifest",
+    "SyncManifestError",
+    "load_sync_manifest",
+    "pack_workspace_extras_to_enc",
+    "decrypt_extras_bundle_file_to_workspace",
 ]

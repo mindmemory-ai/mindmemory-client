@@ -59,6 +59,13 @@ def agent_git_dir(user_uuid: str, agent_name: str) -> Path:
     return agent_workspace_dir(user_uuid, agent_name) / "repo"
 
 
+def resolve_workspace_dir_for_user_agent(user_uuid: str, agent_name: str) -> Path:
+    """``accounts/<uuid>/agents/<agent>/workspace``（与 ``pnms``、``repo`` 同级）。"""
+    p = agent_workspace_dir(user_uuid, agent_name) / "workspace"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def agent_config_path(user_uuid: str, agent_name: str) -> Path:
     return agent_workspace_dir(user_uuid, agent_name) / "agent.json"
 
@@ -117,10 +124,11 @@ def write_agent_config(
     ssh_port: int | None,
     git_ssh_url: str,
 ) -> Path:
-    """写入 ``agent.json``，并确保 ``pnms`` 目录存在。"""
+    """写入 ``agent.json``，并确保 ``pnms``、``workspace`` 目录存在。"""
     ws = agent_workspace_dir(user_uuid, agent_name)
     ws.mkdir(parents=True, exist_ok=True)
     agent_pnms_dir(user_uuid, agent_name).mkdir(parents=True, exist_ok=True)
+    resolve_workspace_dir_for_user_agent(user_uuid, agent_name)
     data = {
         "agent_name": agent_name,
         "user_uuid": user_uuid,
@@ -235,6 +243,7 @@ def ensure_default_agent_workspace(cfg: MindMemoryClientConfig) -> dict[str, Any
     name = DEFAULT_AGENT_NAME
     if agent_config_path(uid, name).is_file():
         agent_pnms_dir(uid, name).mkdir(parents=True, exist_ok=True)
+        resolve_workspace_dir_for_user_agent(uid, name)
         out["ok"] = True
         out["skipped"] = "already_initialized"
         return out

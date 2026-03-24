@@ -439,6 +439,11 @@ def sync_push(
         dir_okay=True,
         help="要打包的 PNMS 目录；默认使用 accounts/<user>/agents/<agent>/pnms",
     ),
+    sync_extras: bool = typer.Option(
+        False,
+        "--sync-extras",
+        help="若存在 workspace/.mmem-sync-manifest.json 则打包为 mmem/bundles/extras.enc 并与 pnms_bundle.enc 同批提交",
+    ),
 ) -> None:
     """
     仅推送 **PNMS 目录** 经 tar.gz + AES-GCM（K_seed）后的 ``pnms_bundle.enc``，不再生成占位 ``mmem_payload.enc``。
@@ -448,6 +453,8 @@ def sync_push(
     需先执行 ``mmem memory merge`` 完成 Git 对齐后再推送。
 
     若既无 ``--git-dir`` 也未初始化 Agent 工作区：仅生成本地 ``./pnms_bundle.enc``，不占锁。
+
+    ``--sync-extras`` 仅在已解析到记忆仓库且存在有效清单时写入 ``mmem/bundles/extras.enc``（见 docs/memory-repo-extended-layout.md）。
     """
     from mindmemory_client.api import MmemApiClient
     from mindmemory_client.keys import read_openssh_private_key_pem
@@ -488,6 +495,11 @@ def sync_push(
     if git_dir is None and resolved_git is None:
         out_file.write_text(bundle_b64 + "\n", encoding="utf-8")
         typer.echo(f"已写入 {out_file}（PNMS 来源: {pnms_src}）")
+        if sync_extras:
+            typer.echo(
+                "未配置记忆仓库：已跳过 --sync-extras（需 Agent 工作区 repo/ 才能写入 mmem/bundles/extras.enc）。",
+                err=True,
+            )
         typer.echo(
             "未配置记忆仓库：未调用 begin-submit。"
             "可执行 mmem agent init <agent> 后重试，或手动指定 --git-dir。"
@@ -541,17 +553,50 @@ def sync_push(
         out_file.write_text(bundle_b64 + "\n", encoding="utf-8")
         typer.echo(f"已写入 {out_file}（PNMS 来源: {pnms_src}）")
 
-        meta = json.dumps(
-            {
-                "memory_schema_version": schema,
-                "client_version": "mindmemory-client",
-                "bundle": "pnms_bundle.enc",
-            },
-            ensure_ascii=False,
-        )
+        extras_rel = "mmem/bundles/extras.enc"
+        extras_path = git_repo / extras_rel
+        extras_done = False
+        if sync_extras and cfg.user_uuid:
+            from mindmemory_client.agent_workspace import resolve_workspace_dir_for_user_agent
+            from mindmemory_client.sync_manifest import MANIFEST_FILENAME, SyncManifestError
+            from mindmemory_client.workspace_extras import pack_workspace_extras_from_manifest_file
+
+            ws_dir = resolve_workspace_dir_for_user_agent(cfg.user_uuid, agent)
+            man = ws_dir / MANIFEST_FILENAME
+            if man.is_file():
+                try:
+                    extras_b64 = pack_workspace_extras_from_manifest_file(man, ws_dir, key)
+                    extras_path.parent.mkdir(parents=True, exist_ok=True)
+                    extras_path.write_text(extras_b64 + "\n", encoding="utf-8")
+                    extras_done = True
+                    typer.echo(f"已写入 {extras_path}（来源 workspace 清单）")
+                except SyncManifestError as e:
+                    typer.echo(f"extras 打包失败: {e}", err=True)
+                    raise typer.Exit(1)
+            else:
+                typer.echo(f"--sync-extras：未找到 {man}，跳过 extras。")
+
+        meta_obj: dict[str, object] = {
+            "memory_schema_version": schema,
+            "client_version": "mindmemory-client",
+            "bundle": "pnms_bundle.enc",
+        }
+        if extras_done:
+            meta_obj["extras_bundle"] = extras_rel
+        meta = json.dumps(meta_obj, ensure_ascii=False)
         subprocess.run(
             ["git", "-C", str(git_repo), "add", "pnms_bundle.enc"],
             check=True,
+        )
+        if extras_done:
+            subprocess.run(
+                ["git", "-C", str(git_repo), "add", extras_rel],
+                check=True,
+            )
+        commit_msg = (
+            "mmem: sync PNMS + workspace extras bundles"
+            if extras_done
+            else "mmem: sync PNMS bundle"
         )
         subprocess.run(
             [
@@ -560,7 +605,7 @@ def sync_push(
                 str(git_repo),
                 "commit",
                 "-m",
-                "mmem: sync PNMS bundle",
+                commit_msg,
                 "-m",
                 f"MMEM_META: {meta}",
             ],
@@ -655,12 +700,24 @@ def memory_import_bundle(
         "--dry-run",
         help="仅打印 bundle 路径与目标 pnms 目录；不写盘、不调用 mindmemory_client 记忆引擎",
     ),
+    import_extras: bool = typer.Option(
+        False,
+        "--import-extras",
+        help="合并 PNMS bundle 后（或配合 --extras-only）从仓库内 mmem/bundles/extras.enc 解压到 workspace/",
+    ),
+    extras_only: bool = typer.Option(
+        False,
+        "--extras-only",
+        help="仅解压 extras.enc，不导入 pnms_bundle.enc（需 --git-dir 或已初始化的 Agent repo）",
+    ),
     base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
 ) -> None:
     """
     解密 ``pnms_bundle.enc`` 至临时目录，经 ``mindmemory_client.memory_bundle.import_encrypted_bundle_to_agent_checkpoint``
     合并进当前 Agent 的 ``…/agents/<agent>/pnms`` 并落盘（内部使用 ``PnmsMemoryBridge.merge_external_checkpoint`` + ``persist_checkpoint``）。
     底层合并语义见已安装的 ``pnms`` 包文档 ``docs/pnms_api.md``。
+
+    ``--import-extras`` / ``--extras-only`` 见 docs/memory-repo-extended-layout.md。
     """
     cfg = resolve_mmem_config(base_url_override=base_url, agent_name_override=agent)
     require_authenticated_user(cfg)
@@ -677,52 +734,82 @@ def memory_import_bundle(
 
     from mindmemory_client.agent_workspace import resolve_git_dir_for_sync, resolve_pnms_dir_for_user_agent
 
+    if extras_only and import_extras is False:
+        import_extras = True
+
+    repo: Path | None = Path(git_dir) if git_dir else None
+    if repo is None:
+        cand = resolve_git_dir_for_sync(cfg, agent)
+        if cand is not None and (cand / ".git").exists():
+            repo = cand
+
     if bundle is not None:
         bundle_path = bundle
-    else:
-        repo = git_dir
-        if repo is None:
-            cand = resolve_git_dir_for_sync(cfg, agent)
-            if cand is not None and (cand / ".git").exists():
-                repo = cand
-        if repo is None:
-            typer.echo("请指定 --bundle 或 --git-dir（或先 mmem agent init 并配置记忆仓库）。", err=True)
-            raise typer.Exit(1)
+    elif repo is not None:
         bundle_path = repo / "pnms_bundle.enc"
-    if not bundle_path.is_file():
-        typer.echo(f"未找到 bundle: {bundle_path}", err=True)
+    else:
+        bundle_path = None  # type: ignore[assignment]
+
+    if extras_only:
+        if repo is None:
+            typer.echo("--extras-only 需要 --git-dir 或已 mmem agent init 的记忆仓库。", err=True)
+            raise typer.Exit(1)
+    elif bundle_path is None or not bundle_path.is_file():
+        typer.echo("请指定 --bundle 或 --git-dir（或先 mmem agent init 并配置记忆仓库）。", err=True)
         raise typer.Exit(1)
 
     dest = resolve_pnms_dir_for_user_agent(cfg, uid, agent)
     if dry_run:
         typer.echo(f"目标 checkpoint 目录: {dest}")
-        typer.echo(f"bundle 文件: {bundle_path}")
+        if bundle_path is not None:
+            typer.echo(f"bundle 文件: {bundle_path}")
+        if import_extras and repo is not None:
+            typer.echo(f"extras 文件: {repo / 'mmem/bundles/extras.enc'}")
         return
 
     from mindmemory_client.keys import read_openssh_private_key_pem
     from mindmemory_client.register_crypto import k_seed_bytes_from_private_key_openssh
-    from mindmemory_client.memory_bundle import (
-        format_memory_engine_error,
-        import_encrypted_bundle_to_agent_checkpoint,
-    )
-    from mindmemory_client.memory_errors import MemoryEngineError
 
     pem = read_openssh_private_key_pem(Path(cfg.private_key_path))
     key = k_seed_bytes_from_private_key_openssh(pem)
-    try:
-        meta = import_encrypted_bundle_to_agent_checkpoint(
-            bundle_path=bundle_path,
-            key=key,
-            dest_pnms_dir=dest,
-            cfg=cfg,
-            user_uuid=uid,
-            agent_name=agent,
+
+    if not extras_only:
+        from mindmemory_client.memory_bundle import (
+            format_memory_engine_error,
+            import_encrypted_bundle_to_agent_checkpoint,
         )
-    except MemoryEngineError as e:
-        typer.echo(format_memory_engine_error(e), err=True)
-        raise typer.Exit(1)
-    typer.echo(f"已与 bundle 融合并保存 checkpoint → {dest}")
-    typer.echo(f"槽数量: {meta.get('num_slots')}")
+        from mindmemory_client.memory_errors import MemoryEngineError
+
+        assert bundle_path is not None
+        try:
+            meta = import_encrypted_bundle_to_agent_checkpoint(
+                bundle_path=bundle_path,
+                key=key,
+                dest_pnms_dir=dest,
+                cfg=cfg,
+                user_uuid=uid,
+                agent_name=agent,
+            )
+        except MemoryEngineError as e:
+            typer.echo(format_memory_engine_error(e), err=True)
+            raise typer.Exit(1)
+        typer.echo(f"已与 bundle 融合并保存 checkpoint → {dest}")
+        typer.echo(f"槽数量: {meta.get('num_slots')}")
+
+    if import_extras:
+        assert repo is not None
+        extras_path = repo / "mmem/bundles/extras.enc"
+        if not extras_path.is_file():
+            typer.echo(f"未找到 {extras_path}，跳过 extras。", err=True)
+            if extras_only:
+                raise typer.Exit(1)
+        else:
+            from mindmemory_client.agent_workspace import resolve_workspace_dir_for_user_agent
+            from mindmemory_client.workspace_extras import decrypt_extras_bundle_file_to_workspace
+
+            ws = resolve_workspace_dir_for_user_agent(uid, agent)
+            xmeta = decrypt_extras_bundle_file_to_workspace(extras_path, ws, key)
+            typer.echo(f"已解压 extras → {ws}（写入 {len(xmeta.get('written', []))} 个文件）")
 
 
 @memory_app.command("merge")
@@ -751,12 +838,18 @@ def memory_merge(
         "--import-bundle",
         help="pull 成功后解密 pnms_bundle.enc 并调用库 API 合并到本 Agent pnms/（需私钥）",
     ),
+    import_extras: bool = typer.Option(
+        False,
+        "--import-extras",
+        help="pull 成功后解密 mmem/bundles/extras.enc 并解压到本 Agent workspace/（需私钥）",
+    ),
     base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
 ) -> None:
     """
     拉取远端并尝试 ``git pull --rebase origin <schema>``，使本地与远端提交历史对齐。
 
     可选 ``--import-bundle``：Git 对齐后调用 ``import_encrypted_bundle_to_agent_checkpoint``（与 ``mmem memory import-bundle`` 相同）。
+    ``--import-extras``：对齐后解压 extras.enc（见 docs/memory-repo-extended-layout.md）。
     """
     from mindmemory_client.agent_workspace import resolve_git_dir_for_sync
 
@@ -780,6 +873,10 @@ def memory_merge(
         if import_bundle:
             typer.echo(
                 f"将执行: 解密 {git_dir}/pnms_bundle.enc 并经 mindmemory_client.memory_bundle 合并到本 Agent pnms/"
+            )
+        if import_extras:
+            typer.echo(
+                f"将执行: 解密 {git_dir}/mmem/bundles/extras.enc 并解压到本 Agent workspace/"
             )
         return
     try:
@@ -847,6 +944,30 @@ def memory_merge(
         typer.echo(
             "可执行 mmem memory import-bundle：经 mindmemory_client 合并 bundle 到本地 pnms/ 后再 mmem sync push。"
         )
+
+    if import_extras:
+        if not cfg.private_key_path:
+            typer.echo(
+                "--import-extras 需要私钥：请 mmem account login 或设置 MMEM_PRIVATE_KEY_PATH。",
+                err=True,
+            )
+            raise typer.Exit(1)
+        uid = cfg.user_uuid
+        assert uid is not None
+        extras_path = git_dir / "mmem/bundles/extras.enc"
+        if not extras_path.is_file():
+            typer.echo(f"未找到 {extras_path}，跳过 extras。", err=True)
+        else:
+            from mindmemory_client.agent_workspace import resolve_workspace_dir_for_user_agent
+            from mindmemory_client.keys import read_openssh_private_key_pem
+            from mindmemory_client.register_crypto import k_seed_bytes_from_private_key_openssh
+            from mindmemory_client.workspace_extras import decrypt_extras_bundle_file_to_workspace
+
+            ws = resolve_workspace_dir_for_user_agent(uid, agent)
+            pem = read_openssh_private_key_pem(Path(cfg.private_key_path))
+            key = k_seed_bytes_from_private_key_openssh(pem)
+            xmeta = decrypt_extras_bundle_file_to_workspace(extras_path, ws, key)
+            typer.echo(f"已解压 extras → {ws}（写入 {len(xmeta.get('written', []))} 个文件）")
 
 
 @sync_app.command("ping")

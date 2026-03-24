@@ -18,6 +18,7 @@ from mindmemory_client.agent_workspace import (
     list_local_agent_workspaces,
     load_agent_config,
     memory_repo_ssh_url,
+    resolve_workspace_dir_for_user_agent,
     write_agent_config,
 )
 from mindmemory_client.client_state import load_state, resolve_mmem_config, save_state
@@ -259,6 +260,7 @@ def agent_info(
     typer.echo(f"工作区: {ws.resolve()}")
     typer.echo(f"PNMS:   {(ws / 'pnms').resolve()}")
     typer.echo(f"Git:    {(ws / 'repo').resolve()}")
+    typer.echo(f"workspace 源文件池: {resolve_workspace_dir_for_user_agent(uid, name).resolve()}")
     meta = load_agent_config(uid, name)
     if meta:
         typer.echo(f"agent.json: git_ssh_url={meta.get('git_ssh_url')}")

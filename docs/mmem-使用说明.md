@@ -242,12 +242,13 @@ OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 AP
 | `--git-dir` | 已配置 **`origin`** 的本地记忆仓库；省略时若已 **`mmem agent init`** 则使用 `.../agents/<agent>/repo/` |
 | `--pack-pnms` | 指定 PNMS 目录；不指定时使用 **`mmem agent init`** 后的 `.../agents/<agent>/pnms/` 或 `MMEM_PNMS_DATA_ROOT/<user>/<agent>/` |
 | `--skip-remote-check` | 不校验 `origin` URL |
+| `--sync-extras` | 若存在 **`workspace/.mmem-sync-manifest.json`**，按清单将文件打包为 **`mmem/bundles/extras.enc`**（与 `pnms_bundle.enc` 同一 `K_seed`），并与 PNMS bundle **同一次 commit** 推送（需已解析到记忆仓库；无仓库时跳过并提示） |
 
 **流程（已解析到记忆仓库目录）**：
 
 1. `git fetch origin`  
 2. 比较本地 `HEAD` 与 `origin/<schema>`：若为 **behind** 或 **diverged**，**不占用同步锁**，退出码 **2**，并提示先执行 **`mmem memory merge`**  
-3. 否则：`begin-submit` → 写入 `pnms_bundle.enc` → `git add/commit/push origin HEAD:refs/heads/<schema>` → `mark-completed`
+3. 否则：`begin-submit` → 写入 `pnms_bundle.enc` →（可选 `--sync-extras`）写入 `mmem/bundles/extras.enc` → `git add/commit/push origin HEAD:refs/heads/<schema>` → `mark-completed`
 
 **无记忆仓库路径**（未 `--git-dir` 且未 `agent init`）：仅生成当前目录 `pnms_bundle.enc`，不占锁。
 
@@ -270,6 +271,8 @@ OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 AP
 
 **`--import-bundle`**：在上述 Git 步骤**成功**后，对 `<git-dir>/pnms_bundle.enc` 调用与 **`mmem memory import-bundle`** 相同的库流程（见 §11.2）。需要已配置私钥（`K_seed`）。
 
+**`--import-extras`**：在上述 Git 步骤**成功**后，若存在 `<git-dir>/mmem/bundles/extras.enc`，则解密并解压到当前 Agent 的 **`workspace/`**（见 [memory-repo-extended-layout.md](./memory-repo-extended-layout.md)）。可与 `--import-bundle` 同时使用。
+
 ### 11.2 `mmem memory import-bundle`
 
 不操作 Git，仅处理加密 bundle：
@@ -282,6 +285,8 @@ OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 AP
 失败时库抛出 **`MemoryEngineError`**（CLI 会格式化为可读说明）。API 入口：**`mindmemory_client.memory_bundle.import_encrypted_bundle_to_agent_checkpoint`**；**`format_memory_engine_error`** 用于展示。
 
 **`--bundle`**：显式指定密文路径时可省略 **`--git-dir`**；否则默认 **`<git-dir>/pnms_bundle.enc`**（`git-dir` 可由 Agent 工作区自动解析）。
+
+**`--import-extras`**：在 PNMS 导入之后（或配合 **`--extras-only`** 单独使用），从 **`<git-dir>/mmem/bundles/extras.enc`** 解密并解压到 **`workspace/`**。**`--extras-only`**：不合并 **`pnms_bundle.enc`**，仅解压 extras（需 **`--git-dir`** 或已初始化的 Agent 记忆仓库）。
 
 ---
 

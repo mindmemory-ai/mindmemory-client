@@ -3,7 +3,7 @@
 本文档约定：**每个 Agent** 在本地除 **`pnms/`**（神经记忆 checkpoint）与 **`repo/`**（记忆 Git 仓库）外，增加同级 **`workspace/`**（工作目录），用于存放当前 **Claw 实例运行时**产生的、或 **CLI 实验性**加入的文件；并通过一份**运行时描述文件**声明「本次同步要打包加密哪些路径」，使 **mindmemory-client** 能在**不区分 Claw 实例目录**的前提下，为**各实例的记忆插件**与**自有 CLI** 提供统一的加密同步入口。
 
 **读者**：实现 Claw 记忆插件、`openclaw-mmem` 类集成、或扩展 **`mmem`** / **mindmemory-client** 的维护者。  
-**状态**：**设计提案**（当前实现仍以根目录 **`pnms_bundle.enc`** 为主；本文描述目标形态与集成契约，可渐进落地）。
+**状态**：**部分已落地**（**`pnms_bundle.enc`** 与 **`mmem/bundles/extras.enc`** 均由 **`K_seed`** 加密；清单与打包见 **`mindmemory_client.sync_manifest`** / **`workspace_extras`**；CLI **`mmem sync push --sync-extras`**、**`memory merge --import-extras`** 等；其余如 **`repo.schema.json`**、宿主 LLM 拼装仍为可选后续）。
 
 ---
 
@@ -152,9 +152,8 @@
 
 | 阶段 | 内容 |
 |------|------|
-| 当前 | 仅 **`pnms_bundle.enc`** + `import_encrypted_bundle_to_agent_checkpoint` |
-| 短期 | 文档化 **`workspace/`** + **`.mmem-sync-manifest.json`**；**`mmem sync push`** 增加读取清单并生成 **`extras.enc`**（可选开关） |
-| 中期 | **`pack_workspace_extras_to_enc(manifest, workspace_root, key) -> bytes`** 等 API；**仍不**在库内绑定 Claw |
+| 当前 | **`pnms_bundle.enc`** + **`mmem/bundles/extras.enc`**（清单 **`workspace/.mmem-sync-manifest.json`**）；库 **`pack_workspace_extras_to_enc`** / **`decrypt_extras_bundle_file_to_workspace`**；CLI **`--sync-extras`** / **`--import-extras`** |
+| 中期 | 干跑列表、更丰富的 glob 与冲突策略；**仍不**在库内绑定 Claw |
 | 长期 | 与 **`repo.schema.json`** 统一校验、CI 钩子 |
 
 ---
