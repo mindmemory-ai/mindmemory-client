@@ -50,9 +50,9 @@ def test_workspace_extras_git_commit_and_decrypt_roundtrip(tmp_path):
 
     (workspace / "p").mkdir()
     (workspace / "p" / "a.txt").write_text("hello-smoke", encoding="utf-8")
-    man = workspace / ".mmem-sync-manifest.json"
-    man.write_text(
-        '{"schema_version":"1","bundles":[{"id":"extras","include":["p/a.txt"],"optional":false}]}',
+    cfg = workspace / "mmem-workspace.json"
+    cfg.write_text(
+        '{"schema_version":"2","sync":{"bundles":[{"id":"extras","include":["p/a.txt"],"optional":false}]}}',
         encoding="utf-8",
     )
 
@@ -64,7 +64,7 @@ def test_workspace_extras_git_commit_and_decrypt_roundtrip(tmp_path):
     ).decode("utf-8")
     key = k_seed_bytes_from_private_key_openssh(pem)
 
-    b64 = pack_workspace_extras_from_manifest_file(man, workspace, key)
+    b64 = pack_workspace_extras_from_manifest_file(cfg, workspace, key)
     dest = repo / "mmem" / "bundles" / "extras.enc"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(b64 + "\n", encoding="utf-8")

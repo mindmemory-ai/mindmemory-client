@@ -1,6 +1,6 @@
-# Agent 工作目录与记忆同步扩展：workspace + 运行时清单
+# Agent 工作目录与记忆同步扩展：workspace + `mmem-workspace.json`
 
-本文档约定：**每个 Agent** 在本地除 **`pnms/`**（神经记忆 checkpoint）与 **`repo/`**（记忆 Git 仓库）外，增加同级 **`workspace/`**（工作目录），用于存放当前 **Claw 实例运行时**产生的、或 **CLI 实验性**加入的文件；并通过一份**运行时描述文件**声明「本次同步要打包加密哪些路径」，使 **mindmemory-client** 能在**不区分 Claw 实例目录**的前提下，为**各实例的记忆插件**与**自有 CLI** 提供统一的加密同步入口。
+本文档约定：**每个 Agent** 在本地除 **`pnms/`**（神经记忆 checkpoint）与 **`repo/`**（记忆 Git 仓库）外，增加同级 **`workspace/`**（工作目录），用于存放 **Claw / CLI** 侧源文件；并通过 **`workspace/mmem-workspace.json`** 描述 **同步进密文仓的子集** 与 **（可选）LLM 提示上下文要读的文件**，使 **mindmemory-client** 在**不按 Claw 实例分子目录**的前提下统一处理。
 
 **读者**：实现 Claw 记忆插件、`openclaw-mmem` 类集成、或扩展 **`mmem`** / **mindmemory-client** 的维护者。  
 **状态**：**部分已落地**（**`pnms_bundle.enc`** 与 **`mmem/bundles/extras.enc`** 均由 **`K_seed`** 加密；清单与打包见 **`mindmemory_client.sync_manifest`** / **`workspace_extras`**；CLI **`mmem sync push --sync-extras`**、**`memory merge --import-extras`** 等；宿主侧 LLM 拼装等仍为可选后续）。
@@ -26,7 +26,7 @@
 | 层级 | 作用 |
 |------|------|
 | **Agent 本地目录** | `pnms/`、`repo/`、**`workspace/`** 三者**同级**；`workspace` 放「候选源文件」，**不**等同于 Git 工作副本。 |
-| **运行时描述文件** | 位于 **`workspace/`**（或下文约定路径），**不参与 Git 同步**；启动时由插件或 CLI **填写**，列出本次要纳入加密 bundle 的**相对路径**。 |
+| **Workspace 配置文件** | **`workspace/mmem-workspace.json`**（**不入记忆 Git**）：见 **§3**。 |
 
 ---
 
@@ -39,61 +39,78 @@
   agent.json                 # Agent 元数据（已有）
   pnms/                      # PNMS checkpoint（神经记忆引擎落盘）
   repo/                      # 记忆 Git 仓库 clone 根（含 .git；远端密文与 pnms_bundle.enc 等）
-  workspace/                 # 【提案】工作目录：Claw 运行时与 CLI 的「源文件池」
-    .mmem-sync-manifest.json # 【提案】运行时清单（见 §3）；默认不提交、不随 repo 走
-    ...                      # 插件或用户放置的任意子树（人格、配置片段、导出文本等）
+  workspace/                 # 工作目录：Claw 运行时与 CLI 的「源文件池」
+    mmem-workspace.json      # workspace 描述与配置（见 §3）；默认不提交、不随 repo 走
+    ...                      # 人格、配置片段、导出文本等
 ```
 
 说明：
 
-- **`workspace/` 不按 Claw 实例分子目录**：同一 Agent 共用一个 `workspace`；**哪次同步带哪些文件**由 **§3 清单** 表达，而不是路径分段。
+- **`workspace/` 不按 Claw 实例分子目录**：同一 Agent 共用一个 `workspace`；**同步子集与（可选）提示路径**由 **§3 `mmem-workspace.json`** 表达，而不是路径分段。
 - **`repo/`** 仍是唯一「与 MindMemory 远端同步」的 Git 树；**清单文件放在 `workspace/`**，故天然**不会**被 `repo` 的 commit 纳入（除非误拷，应避免）。
 
 ---
 
-## 3. 运行时描述文件：`.mmem-sync-manifest.json`（不纳入同步管理）
+## 3. 配置文件：`mmem-workspace.json`（不纳入记忆 Git）
 
 ### 3.1 定位
 
-- **文件路径（推荐）**：`<agent>/workspace/.mmem-sync-manifest.json`。
-- **性质**：**仅运行时**；由 **Claw 记忆插件在实例启动时** 或 **`mmem` 在 push 前** 写入/更新。
-- **不入 Git**：该文件位于 **`repo/` 之外**的 Agent 目录；即使将来工具误操作，也应在 **`repo/.gitignore`**（建议片段见 **§5.1**）或文档中明确**勿将 `../workspace` 绑进记忆仓**。当前布局下 **`repo/` 与 `workspace/` 并列**，正常情况下**不会**提交该文件。
+- **路径**：`<agent>/workspace/mmem-workspace.json`。
+- **性质**：**仅本机**；由 **Claw 插件** 或 **开发者** 维护；**`mmem sync push --sync-extras`** 读取 **`sync.bundles`** 生成 **`mmem/bundles/extras.enc`**。
+- **不入 `repo/`**：与 **`repo/`** 并列，见 **§5.1** 防误拷说明。
 
-### 3.2 语义
+### 3.2 语义（`schema_version` 仅 `"2"`）
 
-清单声明：**从 `workspace/` 根出发**，哪些路径需要被 **mindmemory-client** 打包进**除 PNMS 以外的**加密 bundle（或未来扩展的多 bundle）。**未列入的路径**不同步到密文仓库（仍保留在本地 `workspace` 供运行使用）。
+| 字段 | 作用 |
+|------|------|
+| **`sync.bundles`** | 打进 **`extras.enc`** 的路径（相对 `workspace/`）；语义与实现见 **`mindmemory_client.sync_manifest`**。 |
+| **`prompt`**（可选） | 供宿主拼接 **LLM 上下文**时读取的文件（可与 `sync` 不同，例如仅本机、不同步的文件）；**不**参与 tar 加密，除非路径也出现在 `sync` 中。 |
+| **`prompt.include`** | glob 或字面路径；**`prompt.optional`** 控制缺文件时跳过或告警。 |
 
-示例（字段名可随实现微调，此处为契约说明）：
+**未列入 `sync` 的路径**不会进入密文仓库；仍可留在 `workspace/` 供运行。
+
+### 3.2a `sync` 与 `prompt` 易混点（必读）
+
+| 问题 | 说明 |
+|------|------|
+| **进不进 Git 密文？** | 仅 **`sync.bundles`** 中匹配的文件会进入 **`extras.enc`**；**`prompt`** 段**仅**声明本机读哪些文件给 LLM，**不**参与 tar 加密。 |
+| **二者能否不同？** | 可以。例如：`prompt` 含本机草稿 **`local/hints.md`**，但不希望上云，则**不要**把它写进 **`sync`**；或 **`sync`** 含大资源而 **`prompt`** 只引用摘要文件。 |
+| **CLI `mmem chat`** | 使用 **`prompt`**（经 **`read_workspace_prompt_block`**）拼系统提示；**不**自动把 `sync` 独有文件读入对话，除非它们也出现在 **`prompt.include`** 中。 |
+
+示例：
 
 ```json
 {
-  "schema_version": "1",
+  "schema_version": "2",
   "updated_at": "2026-03-24T12:00:00Z",
-  "bundles": [
-    {
-      "id": "extras",
-      "include": [
-        "persona/core.md",
-        "config/agent_style.toml"
-      ],
-      "optional": true
-    }
-  ],
-  "note": "paths relative to workspace/; pnms/ is never listed here — use existing pnms pack pipeline"
+  "note": "paths relative to workspace/",
+  "sync": {
+    "bundles": [
+      {
+        "id": "extras",
+        "include": ["persona/core.md", "config/agent_style.toml"],
+        "optional": true
+      }
+    ]
+  },
+  "prompt": {
+    "include": ["persona/core.md", "local/hints.md"],
+    "optional": true
+  }
 }
 ```
 
-- **`include`**：glob 或显式相对路径列表；实现方应对路径做 **sanitize**，禁止 `..` 越界。
-- **PNMS**：仍由现有 **`pnms/` → pnms_bundle.enc** 管道处理，**不必**出现在本清单中（避免重复与混淆）；文档与代码注释中写清即可。
+- **`include`**（sync / prompt）：实现方 **sanitize** 路径，禁止 `..` 越界。
+- **PNMS**：仍由 **`pnms/` → `pnms_bundle.enc`**，**不**写入本文件。
 
 ### 3.3 谁写入
 
 | 调用方 | 行为 |
 |--------|------|
-| **Claw 记忆插件** | 实例启动或进入「可同步」状态前，根据当前策略（用户勾选、团队规范）**生成/覆盖**清单。 |
-| **自有 CLI（`mmem`）** | 在实验「人格 / 配置一并推送」时，可提供子命令或编辑向导写入同一清单，再调用库的打包 API。 |
+| **Claw 记忆插件** | 实例启动或进入可同步状态前，按策略 **生成/覆盖** `mmem-workspace.json`。 |
+| **自有 CLI（`mmem`）** | 实验时可手写或借助 **`mmem sync extras-dry-run`** 校验路径。 |
 
-**转换与加密**始终在**调用方进程**内通过 **mindmemory-client** 完成，**不**在服务端解析明文。
+**加密**在**本机**通过 **mindmemory-client** 完成，**不**在服务端解析明文。
 
 ---
 
@@ -101,12 +118,12 @@
 
 与 **`workspace`** 的衔接关系为：
 
-1. 读取 **`workspace/.mmem-sync-manifest.json`**（若存在且 `schema_version` 支持）。
-2. 将 **`include`** 所指文件打成 **tar.gz**（根路径为 `workspace/`）。
+1. 读取 **`workspace/mmem-workspace.json`**（`schema_version` 为 **`"2"`**）。
+2. 将 **`sync.bundles`** 中 **`include`** 所指文件打成 **tar.gz**（根路径为 `workspace/`）。
 3. 使用与 **`pnms_bundle.enc`** 相同的 **`encrypt_memory_base64`（K_seed）**，写入 **`mmem/bundles/extras.enc`**（相对记忆 Git 根；与实现 **`sync_manifest.EXTRAS_BUNDLE_REPO_RELPATH`** 一致）。
 4. **`git add` / `commit` / `push`** 仍走现有 MMEM sync 锁流程。
 
-**拉取侧**：`mmem memory merge` 后，对各 **`*.enc`** 解密；**extras** 类 bundle 解压回 **`workspace/`** 的对应相对路径（**merge 策略**可为 replace 或插件自定义），**不得覆盖**运行时清单本身，除非单独约定。
+**拉取侧**：`mmem memory merge` 后解密各 **`*.enc`**；**extras** 解压回 **`workspace/`** 相对路径；**默认不覆盖** **`mmem-workspace.json`**（见 `decrypt_extras_bundle_*` 参数）。
 
 ---
 
@@ -159,8 +176,8 @@ Thumbs.db
 
 | 顺序 | 来源 | 说明 |
 |------|------|------|
-| 1 | `workspace/` 内被插件标记为「仅本地、不同步」的提示文件（若有） | 不入 Git；可选 |
-| 2 | 解密 **`extras.enc`** 得到的人格/配置片段 | 与清单一致 |
+| 1 | **`mmem-workspace.json`** 中 **`prompt.include`** 指向的明文（若配置） | 可与 `sync` 子集不同；库提供 **`prompt_context_paths_for_workspace`** |
+| 2 | 解密 **`extras.enc`** 得到的人格/配置片段 | 与 **`sync.bundles`** 一致 |
 | 3 | PNMS `get_context` | 神经记忆 |
 | 4 | 用户消息 | — |
 
@@ -179,7 +196,7 @@ Thumbs.db
 
 | 阶段 | 内容 |
 |------|------|
-| 当前 | **`pnms_bundle.enc`** + **`mmem/bundles/extras.enc`**（清单 **`workspace/.mmem-sync-manifest.json`**）；库 **`pack_workspace_extras_to_enc`** / **`decrypt_extras_bundle_file_to_workspace`**；CLI **`--sync-extras`** / **`--import-extras`** |
+| 当前 | **`pnms_bundle.enc`** + **`mmem/bundles/extras.enc`**（**`workspace/mmem-workspace.json`**，`schema_version: 2`）；库 **`load_workspace_config`** / **`pack_workspace_extras_to_enc`** / **`prompt_context_paths_for_workspace`**；CLI **`--sync-extras`** / **`extras-dry-run`** / **`--import-extras`** |
 | 中期 | 干跑列表、更丰富的 glob 与冲突策略；**仍不**在库内绑定 Claw |
 | 长期 | 可选 CI / 约定校验密文路径；宿主与 LLM 集成 |
 
@@ -189,7 +206,7 @@ Thumbs.db
 
 **Claw 记忆插件**
 
-1. 在 Agent 下确保存在 **`workspace/`**，启动时写入 **`.mmem-sync-manifest.json`**（含本次要同步的 `include`）。
+1. 在 Agent 下确保存在 **`workspace/`**，维护 **`mmem-workspace.json`**（**`sync`** 与可选 **`prompt`**）。
 2. 调用 **mindmemory-client** 打包 + 加密 + 将产物路径写入 **`repo/`**，再走已有 **sync** / **git push**。
 3. **PNMS** 仍经 **`PnmsMemoryBridge`**，不在插件内直接 `import pnms`。
 
@@ -201,7 +218,7 @@ Thumbs.db
 **安全**
 
 1. 清单仅描述**相对路径**；实现必须 **防路径穿越**。
-2. **`workspace`** 中可能含敏感草稿；**只有写入 `include` 的项**才进入密文仓。
+2. **`workspace`** 中可能含敏感草稿；**只有写入 `sync.bundles` 的 `include`** 才进入密文仓。
 
 ---
 
@@ -223,3 +240,4 @@ Thumbs.db
 | v2：**Agent 下 `workspace/` 与 `pnms`/`repo` 同级**；**`.mmem-sync-manifest.json` 为运行时、不入 Git**；Claw 与 CLI 共用 mindmemory-client 打包加密流程 |
 | v2.1：**§5.1** 增加 **`repo/.gitignore` 建议片段**（防误将 `repo/` 内指向 workspace 的链接/拷贝纳入版本库） |
 | v2.2：移除 **`mmem/repo.schema.json`** 设计；extras 路径固定为 **`mmem/bundles/extras.enc`**（与代码一致） |
+| v3：**`mmem-workspace.json`** 取代旧清单；仅 **`schema_version: 2`**；含 **`sync`** 与可选 **`prompt`** |

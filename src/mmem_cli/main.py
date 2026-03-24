@@ -204,11 +204,33 @@ def chat(
 
     uid = cfg.user_uuid
     assert uid is not None
-    from mindmemory_client.agent_workspace import resolve_pnms_dir_for_user_agent
+    from mindmemory_client.agent_workspace import (
+        resolve_pnms_dir_for_user_agent,
+        resolve_workspace_dir_for_user_agent,
+        seed_default_workspace_template,
+    )
+    from mindmemory_client.workspace_prompt import read_workspace_prompt_block
+
+    try:
+        seed_default_workspace_template(uid, agent)
+    except Exception as e:
+        logger.debug("seed_default_workspace_template: %s", e)
+
+    ws_dir = resolve_workspace_dir_for_user_agent(uid, agent)
+    ws_block, ws_warns = read_workspace_prompt_block(ws_dir)
+    for w in ws_warns:
+        logger.warning("workspace prompt: %s", w)
 
     pnms_ckpt = resolve_pnms_dir_for_user_agent(cfg, uid, agent)
     bridge = PnmsMemoryBridge(cfg.pnms_data_root, uid, agent, checkpoint_dir=pnms_ckpt)
-    session = ChatMemorySession(bridge)
+    base_sp = "你是个人助手，请严格依据记忆回答。"
+    if ws_block:
+        base_sp = (
+            base_sp
+            + "\n\n以下工作区设定来自 workspace/mmem-workspace.json（prompt），请在不与安全/事实冲突的前提下融入语气与身份：\n\n"
+            + ws_block
+        )
+    session = ChatMemorySession(bridge, system_prompt=base_sp)
     llm_fn = _build_llm_callback(llm_mode, profile, ollama_url, model, config_path)
     logger.info("mmem chat agent=%s llm_mode=%s user=%s", agent, llm_mode, uid)
 
@@ -428,7 +450,7 @@ def sync_extras_dry_run(
         "--manifest",
         exists=True,
         readable=True,
-        help="清单路径；默认 <workspace>/.mmem-sync-manifest.json",
+        help="配置文件路径；默认 <workspace>/mmem-workspace.json",
     ),
     json_out: bool = typer.Option(False, "--json", help="JSON 输出 arcnames 与 warnings"),
     base_url: Optional[str] = typer.Option(None, envvar="MMEM_BASE_URL"),
@@ -503,7 +525,7 @@ def sync_push(
     sync_extras: bool = typer.Option(
         False,
         "--sync-extras",
-        help="若存在 workspace/.mmem-sync-manifest.json 则打包为 mmem/bundles/extras.enc 并与 pnms_bundle.enc 同批提交",
+        help="若存在 workspace/mmem-workspace.json 则打包为 mmem/bundles/extras.enc 并与 pnms_bundle.enc 同批提交",
     ),
 ) -> None:
     """
@@ -619,23 +641,23 @@ def sync_push(
         extras_done = False
         if sync_extras and cfg.user_uuid:
             from mindmemory_client.agent_workspace import resolve_workspace_dir_for_user_agent
-            from mindmemory_client.sync_manifest import MANIFEST_FILENAME, SyncManifestError
+            from mindmemory_client.sync_manifest import SyncManifestError, resolve_workspace_config_path
             from mindmemory_client.workspace_extras import pack_workspace_extras_from_manifest_file
 
             ws_dir = resolve_workspace_dir_for_user_agent(cfg.user_uuid, agent)
-            man = ws_dir / MANIFEST_FILENAME
-            if man.is_file():
+            cfg_path = resolve_workspace_config_path(ws_dir)
+            if cfg_path is not None:
                 try:
-                    extras_b64 = pack_workspace_extras_from_manifest_file(man, ws_dir, key)
+                    extras_b64 = pack_workspace_extras_from_manifest_file(cfg_path, ws_dir, key)
                     extras_path.parent.mkdir(parents=True, exist_ok=True)
                     extras_path.write_text(extras_b64 + "\n", encoding="utf-8")
                     extras_done = True
-                    typer.echo(f"已写入 {extras_path}（来源 workspace 清单）")
+                    typer.echo(f"已写入 {extras_path}（来源 {cfg_path.name}）")
                 except SyncManifestError as e:
                     typer.echo(f"extras 打包失败: {e}", err=True)
                     raise typer.Exit(1)
             else:
-                typer.echo(f"--sync-extras：未找到 {man}，跳过 extras。")
+                typer.echo(f"--sync-extras：未找到 {ws_dir / 'mmem-workspace.json'}，跳过 extras。")
 
         meta_obj: dict[str, object] = {
             "memory_schema_version": schema,

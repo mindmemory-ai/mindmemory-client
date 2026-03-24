@@ -23,7 +23,7 @@
 | **配套 CLI（见第 10 节）** | 不依赖 Claw：本地对话调试 PNMS + mindmemory-client + MindMemory；并可演进为**官方命令行客户端**（配置、健康检查、可选 Git 同步演练）。 |
 | 具体 Claw 插件（如 openclaw-mmem） | Workspace 路径、Hooks/Tools、Git 工作副本、`git push` 分支名、`MEMORY.md` 等**产品层**逻辑。 |
 
-**扩展阅读**：若需在 **Agent 目录**下与 **`pnms/`**、**`repo/`** 并列维护 **`workspace/`**，并以**运行时清单**（**`.mmem-sync-manifest.json`**，不入记忆 Git）声明要加密同步的文件子集，见 **[memory-repo-extended-layout.md](./memory-repo-extended-layout.md)**（设计提案；亦含多 bundle 与 `pnms_bundle.enc` 兼容说明）。
+**扩展阅读**：**`workspace/mmem-workspace.json`**（**`schema_version: 2`**）声明 **`sync`**（进 **`extras.enc`**）与可选 **`prompt`**（LLM 上下文路径），见 **[memory-repo-extended-layout.md](./memory-repo-extended-layout.md)**。
 
 ### 1.3 非目标
 
@@ -289,6 +289,35 @@ CLI 不改变该语义，只做**终端侧的胶水**：
 | `openai` 兼容（后续） | HTTP API Key；可与 profile 并列演进。 |
 
 CLI 将 **PNMS 给出的 `context`** 与用户 **query** 拼入 Ollama 的 user 消息；`mmem doctor` 会探测 **Ollama `/api/tags`**。示例配置见 `docs/config.example.toml`。
+
+#### 10.5.1 `mmem chat` 与工作区 `mmem-workspace.json`（当前实现与演进方向）
+
+**当前实现**：
+
+- **`mmem chat`** 启动时：若 **`accounts/.../agents/<agent>/workspace/`** 下尚无 **`mmem-workspace.json`**，且包内存在 **`mindmemory_client.agent.<Agent名>.workspace`** 模板目录，则 **播种**（当前内置 **BT-7274**：`identity.md`、`soul.md`、配置）；见 **`seed_default_workspace_template`**。
+- 若存在 **`mmem-workspace.json`** 且配置了 **`prompt.include`**，则通过 **`read_workspace_prompt_block`** 读取并拼入 **`ChatMemorySession` 的 `system_prompt`**（在 PNMS **`context_builder`** 使用同一 `system_prompt` 之前），使「身份/灵魂」类明文与神经记忆分层。
+- **`sync.bundles`** 仍仅由 **`mmem sync push --sync-extras`** 等路径消费，用于生成 **`mmem/bundles/extras.enc`**；**`prompt`** 与 **`sync`** 可配置为不同子集，语义见 **[memory-repo-extended-layout.md](./memory-repo-extended-layout.md)** §3.2a。
+
+**`sync` 与 `prompt` 的分工**（避免混淆）：
+
+| 段 | 作用 |
+|----|------|
+| **`sync.bundles`** | 打进 **`extras.enc`**、随记忆 Git 同步的明文子集。 |
+| **`prompt`** | 供 **`mmem chat`**（及宿主）在**本机**拼装 LLM 系统侧上下文的文件列表；**不**加密、**不**因未列入 `sync` 而自动进仓。 |
+
+**Ollama 请求形态（已知局限）**：实现上将「PNMS 返回的 `context` + 用户问题」合成**一条 `role: user` 消息**（见 **`ollama_llm.build_ollama_llm`**）。后续可评估改为 **`system` + `user`** 分栏，以改善部分模型对指令的遵循。
+
+**模板与仓库布局**：
+
+- **打包源**：**`src/mindmemory_client/agent/BT-7274/workspace/`**（随 **`pyproject.toml`** `package-data` 安装）。
+- 仓库根 **`agent/BT-7274/workspace/`** 若存在，为便于阅读/拷贝的**镜像**，**以包内路径为准**；避免只改一侧导致漂移。
+
+**建议后续（本仓库 TODO 跟踪）**：
+
+- **`mmem chat --no-workspace-prompt`**（或环境变量）以对照「纯 PNMS、无工作区人格」行为。
+- **`--verbose` / 启动提示**：简要提示是否已加载 workspace 提示块（解析失败时可见告警，而非仅日志）。
+- **文案与 i18n**：默认系统提示与 Ollama 包装句为中文硬编码；可抽常量或配置，便于英文与多语言。
+- **非默认 Agent**：无包内模板时需**自建** `mmem-workspace.json` 或从 BT-7274 目录复制后改名。
 
 ### 10.6 与「自有客户端」产品线的关系
 

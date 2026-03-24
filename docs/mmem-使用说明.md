@@ -188,7 +188,7 @@ mmem agent --help
 2. **`mmem agent init <名称>`**：向服务端请求注册（`begin-submit` + 失败型 `mark_completed` 释放锁）、在 `accounts/<user_uuid>/agents/<名称>/` 写入 `agent.json`、创建 **`pnms/`** 与将记忆仓库 **`git clone`** 到 **`repo/`**（使用账户私钥 `GIT_SSH_COMMAND`）。
 3. **`mmem chat --agent <名称>`**、**`mmem sync push --agent <名称>`** 会自动使用该工作区下的 **`pnms/`** 与 **`repo/`**（无需再手写 `--git-dir`，仍可显式覆盖）。
 
-**扩展**：与 **`pnms/`**、**`repo/`** 同级有 **`workspace/`**（源文件池）；通过 **`workspace/.mmem-sync-manifest.json`**（**运行时填写、不进入记忆 Git**）声明要打进 **`mmem/bundles/extras.enc`** 的路径。记忆仓根目录 **`repo/.gitignore`** 建议片段见该文档 **§5.1**。全文：**[memory-repo-extended-layout.md](./memory-repo-extended-layout.md)**。
+**扩展**：与 **`pnms/`**、**`repo/`** 同级有 **`workspace/`**（源文件池）；通过 **`workspace/mmem-workspace.json`**（**`schema_version: 2`**，含 **`sync`** 与可选 **`prompt`**，不进入记忆 Git）声明打进 **`mmem/bundles/extras.enc`** 的路径及（可选）LLM 上下文文件。记忆仓 **`repo/.gitignore`** 建议见该文档 **§5.1**。全文：**[memory-repo-extended-layout.md](./memory-repo-extended-layout.md)**。
 
 OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 API（与 `agent_name` 一致）。
 
@@ -242,7 +242,7 @@ OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 AP
 | `--git-dir` | 已配置 **`origin`** 的本地记忆仓库；省略时若已 **`mmem agent init`** 则使用 `.../agents/<agent>/repo/` |
 | `--pack-pnms` | 指定 PNMS 目录；不指定时使用 **`mmem agent init`** 后的 `.../agents/<agent>/pnms/` 或 `MMEM_PNMS_DATA_ROOT/<user>/<agent>/` |
 | `--skip-remote-check` | 不校验 `origin` URL |
-| `--sync-extras` | 若存在 **`workspace/.mmem-sync-manifest.json`**，按清单将文件打包为 **`mmem/bundles/extras.enc`**（与 `pnms_bundle.enc` 同一 `K_seed`），并与 PNMS bundle **同一次 commit** 推送（需已解析到记忆仓库；无仓库时跳过并提示） |
+| `--sync-extras` | 若存在 **`workspace/mmem-workspace.json`**，按 **`sync.bundles`** 将文件打包为 **`mmem/bundles/extras.enc`**（与 `pnms_bundle.enc` 同一 `K_seed`），并与 PNMS bundle **同一次 commit** 推送（需已解析到记忆仓库；无仓库时跳过并提示） |
 
 **流程（已解析到记忆仓库目录）**：
 
@@ -254,7 +254,7 @@ OpenClaw 等环境应将**当前选中的 Agent 名**传入同一套客户端 AP
 
 ### 10.2.1 `mmem sync extras-dry-run`
 
-根据 **`workspace/.mmem-sync-manifest.json`**（或 **`--manifest`**）解析 **`include`**，**仅打印**将打入 extras **tar** 的相对路径（**不**加密、**不**写 `repo/`）。需已登录（解析 `user_uuid` 与默认 `workspace`）。**`--json`** 输出 `arcnames` 与 `warnings` 数组。
+根据 **`workspace/mmem-workspace.json`**（或 **`--manifest`** 指向该文件）解析 **`sync.bundles`**，**仅打印**将打入 extras **tar** 的相对路径（**不**加密、**不**写 `repo/`）。需已登录。**`--json`** 输出 `arcnames` 与 `warnings`。
 
 ### 10.3 `mmem sync ping`
 

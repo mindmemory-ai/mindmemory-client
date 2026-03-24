@@ -29,17 +29,23 @@ from mindmemory_client.register_crypto import (
 )
 from mindmemory_client.session import ChatMemorySession
 from mindmemory_client.sync_manifest import (
-    MANIFEST_FILENAME,
     EXTRAS_BUNDLE_REPO_RELPATH,
-    SyncManifest,
+    MANIFEST_FILENAME,
+    PromptSection,
+    SUPPORTED_SCHEMA_VERSION,
     SyncManifestError,
-    load_sync_manifest,
+    WORKSPACE_CONFIG_FILENAME,
+    WorkspaceConfig,
+    load_workspace_config,
+    prompt_context_paths_for_workspace,
+    resolve_workspace_config_path,
 )
 from mindmemory_client.workspace_extras import (
     decrypt_extras_bundle_file_to_workspace,
     dry_run_workspace_extras_paths,
     pack_workspace_extras_to_enc,
 )
+from mindmemory_client.workspace_prompt import read_workspace_prompt_block
 from mindmemory_client.client_home import default_client_home
 from mindmemory_client.client_state import resolve_mmem_config
 from mindmemory_client.credential_source import credential_source
@@ -74,12 +80,18 @@ __all__ = [
     "get_client_settings",
     "credential_source",
     "configure_client_logging",
+    "WORKSPACE_CONFIG_FILENAME",
     "MANIFEST_FILENAME",
     "EXTRAS_BUNDLE_REPO_RELPATH",
-    "SyncManifest",
+    "SUPPORTED_SCHEMA_VERSION",
+    "WorkspaceConfig",
+    "PromptSection",
     "SyncManifestError",
-    "load_sync_manifest",
+    "load_workspace_config",
+    "prompt_context_paths_for_workspace",
+    "resolve_workspace_config_path",
     "pack_workspace_extras_to_enc",
     "dry_run_workspace_extras_paths",
     "decrypt_extras_bundle_file_to_workspace",
+    "read_workspace_prompt_block",
 ]

@@ -1,0 +1,17 @@
+{
+  "schema_version": "2",
+  "note": "MindMemory 内置默认 Agent（BT-7274）工作区模板：identity=身份与协议，soul=气质与言行。可自由修改；sync 与 prompt 可分别调整。",
+  "sync": {
+    "bundles": [
+      {
+        "id": "persona",
+        "include": ["identity.md", "soul.md"],
+        "optional": false
+      }
+    ]
+  },
+  "prompt": {
+    "include": ["identity.md", "soul.md"],
+    "optional": true
+  }
+}

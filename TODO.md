@@ -2,7 +2,7 @@
 
 依据 [docs/mindmemory-client-设计.md](docs/mindmemory-client-设计.md)。完成一项则勾选并提交 git。
 
-**摘要**：库与 **`mmem`** CLI 已覆盖 PNMS、MMEM API、**`workspace/` + extras 密文**（清单、打包、解密、`sync push --sync-extras`、`memory` 侧 `--import-extras`、**`sync extras-dry-run`**）。**未在本仓库实现**的多为 **Claw 等宿主**（写清单、调库、LLM 拼装），见文末「宿主集成」。
+**摘要**：库与 **`mmem`** CLI 已覆盖 PNMS、MMEM API、**`workspace/` + extras 密文**（**`mmem-workspace.json`**、打包、解密、`sync push --sync-extras`、`memory` 侧 `--import-extras`、**`sync extras-dry-run`**）；**`mmem chat`** 已读取 **`prompt`** 并内置 **BT-7274** 工作区模板。**待完善项**见下节「CLI / workspace 演进」与文末「宿主集成」。
 
 ## 依赖安装（开发）
 
@@ -32,7 +32,7 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 ## CLI `mmem`
 
 - [x] `mmem doctor` — 依赖、MindMemory、Ollama（`/api/tags`）
-- [x] `mmem chat` — 默认 `--llm ollama`；`--profile` / `-p`；`--ollama-url`、`--model`；`mock`/`echo`；`--no-remote`
+- [x] `mmem chat` — 默认 `--llm ollama`；`--profile` / `-p`；`--ollama-url`、`--model`；`mock`/`echo`；`--no-remote`；**`workspace/mmem-workspace.json`** 的 **`prompt`** 拼入 **`system_prompt`**（见 **`read_workspace_prompt_block`**）
 - [x] `mmem models` — 列出已加载 profile
 - [x] **`mmem sync encrypt-file` / `decrypt-file`** — K_seed 加解密文件
 - [x] **`mmem sync push`** — **`pnms_bundle.enc`**（PNMS tar.gz + K_seed）；可选 **`--sync-extras`** 生成 **`mmem/bundles/extras.enc`**；无 `--git-dir` 时只写本地 **`./pnms_bundle.enc`**
@@ -50,27 +50,30 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 
 ---
 
-## workspace + 运行时清单（见 [docs/memory-repo-extended-layout.md](docs/memory-repo-extended-layout.md)）
+## workspace + `mmem-workspace.json`（见 [docs/memory-repo-extended-layout.md](docs/memory-repo-extended-layout.md)）
 
-**已实现**：**`pnms/`**、**`repo/`**、**`workspace/`** 同级；**`workspace/.mmem-sync-manifest.json`**（不入记忆 Git）声明打入 **`mmem/bundles/extras.enc`** 的路径；与 **`K_seed`**、**`mmem sync push`** / **`mmem memory merge`** 同一套同步流程（见上节 CLI 与下文勾选）。
+**已实现**：**`pnms/`**、**`repo/`**、**`workspace/`** 同级；**`workspace/mmem-workspace.json`**（**仅** `schema_version: 2`，不入记忆 Git）声明 **`sync.bundles`** → **`mmem/bundles/extras.enc`**，可选 **`prompt`**；与 **`K_seed`**、**`mmem sync push`** / **`mmem memory merge`** 同一套同步流程。
 
 ### 目录与初始化
 
 - [x] `agent_workspace`：提供 **`resolve_workspace_dir_for_user_agent`** 指向 `<agent>/workspace/`，与 `pnms`、`repo` 同级
-- [x] **`write_agent_config`** / **`ensure_default_agent_workspace`**：创建空 **`workspace/`**（清单仍由调用方写入）
+- [x] **`write_agent_config`** / **`ensure_default_agent_workspace`**：创建 **`workspace/`**；若尚无 **`mmem-workspace.json`** 且存在包内模板则 **播种**（当前 **BT-7274**）
 - [x] 文档：**`repo/.gitignore` 建议片段**见 [memory-repo-extended-layout.md §5.1](./docs/memory-repo-extended-layout.md)；`mmem-使用说明.md` 已补充 sync / merge / import-bundle 行为
 
-### 清单 `.mmem-sync-manifest.json`
+### 配置 `mmem-workspace.json`
 
-- [x] 定义 **`schema_version`** 与 Pydantic 模型（`bundles[]`：`id`、`include`、`optional` 等），见 **`mindmemory_client/sync_manifest.py`**
-- [x] 解析与校验：未知 `schema_version` 时 **`load_sync_manifest`** 抛出 **`SyncManifestError`**
-- [x] **路径安全**：`include` 禁止 **`..`**、绝对路径；tar 解压时校验成员路径
+- [x] **`WorkspaceConfig`**（**`sync`** + 可选 **`prompt`**）、**`load_workspace_config`**，见 **`mindmemory_client/sync_manifest.py`**；仅 **`schema_version: 2`**
+- [x] 解析与校验失败时抛出 **`SyncManifestError`**
+- [x] **路径安全**：`sync.bundles[].include` 禁止 **`..`**、绝对路径；tar 解压时校验成员路径
 - [x] **`optional`**：未匹配文件时记 warning 或跳过（非 optional 则报错）
+- [x] **`prompt_context_paths_for_workspace`**：供宿主拼装 LLM 上下文（不参与加密，除非路径也在 `sync` 中）
+- [x] **`read_workspace_prompt_block`**（**`workspace_prompt.py`**）：CLI **`mmem chat`** 拼系统提示
+- [x] **`seed_default_workspace_template`**：包内 **`mindmemory_client/agent/BT-7274/workspace/`** 播种；仓库根 **`agent/BT-7274/workspace/`** 为可选镜像
 
 ### 库 API（mindmemory_client）
 
 - [x] **`pack_workspace_extras_to_enc`** / **`pack_workspace_extras_from_manifest_file`**：tar.gz → **`encrypt_memory_base64`**
-- [x] **`decrypt_extras_bundle_file_to_workspace`** / **`decrypt_extras_bundle_bytes_to_workspace`**：解密 → 解压到 `workspace/`；**默认跳过** **`.mmem-sync-manifest.json`**
+- [x] **`decrypt_extras_bundle_file_to_workspace`** / **`decrypt_extras_bundle_bytes_to_workspace`**：解密 → 解压到 `workspace/`；**默认跳过** **`mmem-workspace.json`**
 - [x] 与 **`memory_bundle`** 边界：extras **仅**落 **`workspace/`**，不经 PNMS **`merge_memories`**
 
 ### `repo/` 内产物路径（与 §5 兼容）
@@ -79,16 +82,25 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 
 ### CLI `mmem`
 
-- [x] **`mmem sync push --sync-extras`**：清单存在则生成 **`mmem/bundles/extras.enc`** 并与 **`pnms_bundle.enc`** 同批 **`git add` / commit**
+- [x] **`mmem sync push --sync-extras`**：**`mmem-workspace.json`** 存在则生成 **`mmem/bundles/extras.enc`** 并与 **`pnms_bundle.enc`** 同批 **`git add` / commit**
 - [x] **`mmem memory merge --import-extras`**；**`mmem memory import-bundle --import-extras`** / **`--extras-only`**
 - [x] （可选）干跑：**`mmem sync extras-dry-run`**（**`--json`**）仅列出将打入 extras tar 的相对路径
 
 ### 测试与安全
 
-- [x] 单元测试：`tests/test_sync_manifest.py`、`tests/test_workspace_extras.py`
+- [x] 单元测试：`tests/test_sync_manifest.py`、`tests/test_workspace_extras.py`、**`tests/test_workspace_prompt.py`**
 - [x] 集成测试（可选）：**`tests/test_integration_git_smoke.py`**（临时 `git init` + `mmem/bundles/extras.enc` commit + 解密回写）
+
+### CLI / workspace 演进（设计见 `docs/mindmemory-client-设计.md` §10.5.1、`memory-repo-extended-layout.md` §3.2a）
+
+- [ ] **`mmem chat --no-workspace-prompt`**（或 **`MMEM_CHAT_NO_WORKSPACE_PROMPT=1`**）：跳过 **`read_workspace_prompt_block`**，便于对照纯 PNMS 行为
+- [ ] **启动可观测性**：在终端简要提示「已加载 / 未找到 / 解析失败」workspace 提示（除 logger 外）
+- [ ] **Ollama**：评估将 PNMS `context` 与 **工作区 system 段**拆为 **`system` + `user` 消息**，替代单条 user 拼接（见 **`ollama_llm.build_ollama_llm`**）
+- [ ] **文案 i18n**：默认系统提示与 Ollama 包装句抽常量或配置，支持英文等
+- [ ] **模板单一来源**：CI 或脚本校验 **`src/mindmemory_client/agent/BT-7274/workspace/`** 与仓库根 **`agent/BT-7274/workspace/`** 一致（若保留镜像）
+- [ ] **文档**：非 BT-7274 Agent 如何复制模板、维护 **`mmem-workspace.json`**（`mmem-使用说明` 小节）
 
 ### 宿主集成（本仓库不实现，供 OpenClaw / 自研插件跟踪）
 
-- [ ] **Claw 记忆插件**：实例启动时写 **`.mmem-sync-manifest.json`** → 调用 **mindmemory-client** 打包/加密 → **`mmem sync push`**（或等价流程）；**不在**本库内绑定 Claw。
-- [ ] （可选）**LLM 上下文**：按 [memory-repo-extended-layout.md §6](docs/memory-repo-extended-layout.md) 将 **workspace / extras 解密内容** 与 PNMS **`get_context`** 拼接；由 **CLI 或宿主** 实现，**非** mindmemory-client 必选能力。
+- [ ] **Claw 记忆插件**：实例启动时维护 **`mmem-workspace.json`** → 调用 **mindmemory-client** 打包/加密 → **`mmem sync push`**（或等价流程）；**不在**本库内绑定 Claw。
+- [ ] （可选）**LLM 上下文**：宿主侧按 [memory-repo-extended-layout.md §6](docs/memory-repo-extended-layout.md) 将 **workspace `prompt` / extras 解密内容** 与 PNMS **`get_context`** 拼接；**`mmem chat`** 已实现 **`prompt`** 路径，**extras 解密正文**仍可由宿主按需叠加。
