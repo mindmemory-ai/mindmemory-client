@@ -2,7 +2,7 @@
 
 依据 [docs/mindmemory-client-设计.md](docs/mindmemory-client-设计.md)。完成一项则勾选并提交 git。
 
-**摘要**：库与 **`mmem`** CLI 已覆盖 PNMS、MMEM API、**`workspace/` + extras 密文**（**`mmem-workspace.json`**、打包、解密、`sync push --sync-extras`、`memory` 侧 `--import-extras`、**`sync extras-dry-run`**）；**`mmem chat`** 已读取 **`prompt`** 并内置 **BT-7274** 工作区模板。**待完善项**见下节「CLI / workspace 演进」与文末「宿主集成」。
+**摘要**：库与 **`mmem`** CLI 已覆盖 PNMS、MMEM API、**`workspace/` + extras 密文**（**`mmem-workspace.json`**、打包、解密、`sync push --sync-extras`、`memory` 侧 `--import-extras`、**`sync extras-dry-run`**）；**`mmem chat`** 已读取 **`prompt`** 并内置 **BT-7274** 工作区模板；**大型集成**见 **`tests/test_large_memory_scenario.py`**。**待完善项**见 **「客户端后续改进」**、文末「宿主集成」，设计见 [mindmemory-client-设计.md §10.8](docs/mindmemory-client-设计.md)。
 
 ## 依赖安装（开发）
 
@@ -47,6 +47,20 @@ cd ../mindmemory-client && pip install -e ".[dev]"
 - [x] 对真实 `MMEM_BASE_URL`：手动运行 `mmem doctor` + `mmem chat -m "hi" --llm mock`（`--no-remote` 已可离线验证 PNMS）
 - [x] `MMEM_INTEGRATION=1`（mindmemory 仓库）全链路：需 MySQL、Gogs、已注册账号与私钥；示例：`cd ../mindmemory && MMEM_INTEGRATION=1 MMEM_BASE_URL=http://127.0.0.1:8000 GOGS_REPO_ROOT=…/mindmemory/.data/gogs-repositories python -m pytest tests/test_integration_flow.py -v`
 - [x] 本仓库自动化：**`tests/test_integration_git_smoke.py`**（临时 git + extras 往返，无需远端）
+- [x] **`tests/test_large_memory_scenario.py`**：30 轮 + bundle 合并 + 20 轮、提示词落盘（**`@pytest.mark.integration`**）
+
+---
+
+## 客户端后续改进（设计见 [docs/mindmemory-client-设计.md §10.8](docs/mindmemory-client-设计.md)）
+
+- [ ] **可操作错误提示**：同步 / Git 落后 / 签名校验失败等，在提示中附带建议命令（如先 **`mmem memory merge`**）
+- [ ] **调试可观测性**：**`mmem chat`** 可选 **`--verbose`** 或环境变量，打印 **`num_slots_used`**、**`phase`** 等
+- [ ] **CLI 回归**：**Typer `CliRunner`** 覆盖 **`mmem`** 关键子命令退出码与关键输出片段
+- [ ] **远端 opt-in E2E**：凭证 + **`MMEM_BASE_URL`** 可用时的只读烟测（**`-m e2e_remote`** 或环境变量门控）
+- [ ] **OpenAI 兼容 LLM**：与 **Ollama** 并列的 profile 后端（HTTP + API Key）
+- [ ] **（可选）extras 进对话**：库或 CLI 可选将 **`extras.enc` 解密片段**按 memory-repo-extended-layout §6 拼入上下文
+- [ ] **发布**：语义化版本 + **CHANGELOG**；文档区分最小安装与含 **`pnms`/`torch`** 的完整能力
+- [ ] **i18n 统一**：**`chat_strings`** 扩展至 **`doctor`** 等，或文档固定「仅 chat 多语言」
 
 ---
 

@@ -288,7 +288,7 @@ CLI 不改变该语义，只做**终端侧的胶水**：
 | `mock` / `echo` | 无大模型：验证 PNMS 状态机与上下文长度。 |
 | `openai` 兼容（后续） | HTTP API Key；可与 profile 并列演进。 |
 
-CLI 将 **PNMS 给出的 `context`** 与用户 **query** 拼入 Ollama 的 user 消息；`mmem doctor` 会探测 **Ollama `/api/tags`**。示例配置见 `docs/config.example.toml`。
+Ollama 路径见 §10.5.1：**`system`** + **`user`**；`mmem doctor` 会探测 **Ollama `/api/tags`**。示例配置见 `docs/config.example.toml`。
 
 #### 10.5.1 `mmem chat` 与工作区 `mmem-workspace.json`（当前实现与演进方向）
 
@@ -326,6 +326,24 @@ CLI 将 **PNMS 给出的 `context`** 与用户 **query** 拼入 Ollama 的 user 
 
 - **烟测**：`mmem doctor` + `mmem chat --no-remote -m "hello" --llm mock` 在无服务端时通过。
 - **集成**：`MMEM_INTEGRATION=1` 时对真实 `MMEM_BASE_URL` 跑 `doctor` + 可选 `sync status`（只读）。
+- **本仓库**：**`tests/test_large_memory_scenario.py`**（`@pytest.mark.integration`）：30 轮对话 → **`pnms_bundle`** → **`import_encrypted_bundle_to_agent_checkpoint`** → 20 轮追问；每轮将 PNMS 传入 LLM 的 **`(query, context)`** 落盘；不依赖真实账号目录。
+
+### 10.8 客户端后续改进（产品 / 工程，待迭代）
+
+以下为本仓库**尚未全面落地**、但建议在路线图或 issue 中跟踪的方向；与 §10.5.1「仍可演进」互补。
+
+| 方向 | 说明 |
+|------|------|
+| **可操作错误提示** | 同步失败、Git **behind/diverged**、签名校验失败等，在 stderr 中除原因外给出**建议下一步命令**（如先 **`mmem memory merge`** 再 **`mmem sync push`**），减少用户翻文档成本。 |
+| **调试可观测性** | 可选 **`--verbose`** / **`MMEM_CHAT_DEBUG`**：在 **`mmem chat`** 每轮打印 **`ChatTurnResult`** 中的 **`num_slots_used`**、**`phase`**（冷启动阶段等），便于对照「记忆是否在增长」。 |
+| **CLI 回归测试** | 对 **`mmem`** 关键子命令使用 **Typer `CliRunner`** 做轻量快照/退出码测试；与现有库层单测互补。 |
+| **远端 opt-in E2E** | 在凭证与 **`MMEM_BASE_URL`** 可用时，可选 **`pytest -m e2e_remote`**（或环境变量门控）跑只读 **`/health`** + **`list_agents`** 等，**不**替代 mindmemory 仓库内全链路集成测试。 |
+| **第二 LLM 后端** | **OpenAI 兼容 HTTP**（API Key、base URL）与 **`ollama`** 并列，由 **`config.toml` profile** 选择；与 §10.5 表中「openai 兼容（后续）」一致。 |
+| **extras 与对话（可选）** | 库内可选 API：在 **`mmem chat`** 或宿主中，将 **`extras.enc` 解密后的指定片段**与 **`prompt`**、PNMS **`get_context`** 按 [memory-repo-extended-layout.md §6](./memory-repo-extended-layout.md) 顺序拼接；**默认**仍仅 **`prompt` 明文**进 Ollama **system**。 |
+| **发布与依赖说明** | **语义化版本** + **CHANGELOG**；文档中区分 **最小安装**（无 `torch`/`pnms` 时库能力子集）与 **完整 chat**（需可编辑安装 **`pnms`**）。 |
+| **文案与 i18n 统一** | 将 **`chat_strings`** 扩展至 **`mmem doctor`** 等高频输出，或明确「仅 chat 多语言」的产品口径。 |
+
+**边界**：**Claw / OpenClaw 插件**仍不在本仓库实现；见 §10.6 与 **[TODO.md](../TODO.md)**「宿主集成」。
 
 ---
 
